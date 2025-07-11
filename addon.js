@@ -1228,14 +1228,14 @@ const manifest = {
   catalogs: [
     {
       type: "movie",
-      id: "top",
+      id: "aisearch.top",
       name: "AI Movie Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
     },
     {
       type: "series",
-      id: "top",
+      id: "aisearch.top",
       name: "AI Series Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,

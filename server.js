@@ -294,14 +294,14 @@ const getConfiguredManifest = (geminiKey, tmdbKey) => ({
   catalogs: [
     {
       type: "movie",
-      id: "top",
+      id: "aisearch.top",
       name: "AI Movie Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
     },
     {
       type: "series",
-      id: "top",
+      id: "aisearch.top",
       name: "AI Series Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
@@ -1182,7 +1182,7 @@ async function startServer() {
     app.use("/", addonRouter);
     app.use(BASE_PATH, addonRouter);
 
-    app.post("/encrypt", express.json(), (req, res) => {
+    app.post(["/encrypt", "/aisearch/encrypt"], express.json(), (req, res) => {
       try {
         const configData = req.body;
         if (!configData) {
@@ -1213,7 +1213,7 @@ async function startServer() {
       }
     });
 
-    app.post("/decrypt", express.json(), (req, res) => {
+    app.post(["/decrypt", "/aisearch/decrypt"], express.json(), (req, res) => {
       try {
         const { encryptedConfig } = req.body;
         if (!encryptedConfig) {
