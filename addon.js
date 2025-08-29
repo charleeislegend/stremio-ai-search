@@ -1240,6 +1240,16 @@ const manifest = {
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
     },
+    {
+      type: "movie",
+      id: "aisearch.recommend",
+      name: "AI Movie Recommendations",
+    },
+    {
+      type: "series",
+      id: "aisearch.recommend",
+      name: "AI Series Recommendations",
+    },
   ],
   behaviorHints: {
     configurable: true,
@@ -2613,7 +2623,24 @@ function detectPlatform(extra = {}) {
 
 const catalogHandler = async function (args, req) {
   const startTime = Date.now();
-  const { type, extra } = args;
+  const { id, type, extra } = args;
+
+  let searchQuery = "";
+  if (typeof extra === "string" && extra.includes("search=")) {
+    searchQuery = decodeURIComponent(extra.split("search=")[1]);
+  } else if (extra?.search) {
+    searchQuery = extra.search;
+  }
+
+  if (!searchQuery) {
+    if (id == "aisearch.recommend") {
+      searchQuery = "Recommend";
+    } else {
+      logger.error("No search query provided");
+      logger.emptyCatalog("No search query provided", { type, extra });
+      return { metas: [] };
+    }
+  }
 
   try {
     const encryptedConfig = req.stremioConfig;
@@ -2710,19 +2737,6 @@ const catalogHandler = async function (args, req) {
 
     const platform = detectPlatform(extra);
     logger.debug("Platform detected", { platform, extra });
-
-    let searchQuery = "";
-    if (typeof extra === "string" && extra.includes("search=")) {
-      searchQuery = decodeURIComponent(extra.split("search=")[1]);
-    } else if (extra?.search) {
-      searchQuery = extra.search;
-    }
-
-    if (!searchQuery) {
-      logger.error("No search query provided");
-      logger.emptyCatalog("No search query provided", { type, extra });
-      return { metas: [] };
-    }
 
     // Only increment the counter and log for initial search queries, not for clicks on individual items
     const isSearchRequest =
