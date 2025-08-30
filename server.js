@@ -268,6 +268,7 @@ const BASE_PATH = "/aisearch";
 const DEFAULT_RPDB_KEY = process.env.RPDB_API_KEY;
 const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
+const TRAKT_API_BASE = "https://api.trakt.tv";
 
 const setupManifest = {
   id: "au.itcon.aisearch",
@@ -479,17 +480,33 @@ async function startServer() {
       addonRouter.get(routePath + ":config/manifest.json", (req, res) => {
         try {
           const encryptedConfig = req.params.config;
-
           req.stremioConfig = encryptedConfig;
-
-          const manifestWithConfig = {
+          let manifestWithConfig = {
             ...addonInterface.manifest,
-            behaviorHints: {
-              ...addonInterface.manifest.behaviorHints,
-              configurationRequired: !encryptedConfig,
-            },
           };
-
+          let enableHomepage = true;
+          if (encryptedConfig && isValidEncryptedFormat(encryptedConfig)) {
+            const decryptedConfigStr = decryptConfig(encryptedConfig);
+            if (decryptedConfigStr) {
+              try {
+                const configData = JSON.parse(decryptedConfigStr);
+                if (configData.EnableHomepage !== undefined) {
+                  enableHomepage = configData.EnableHomepage;
+                }
+              } catch (e) {
+                logger.warn("Failed to parse decrypted config for manifest generation", { error: e.message });
+              }
+            }
+          }
+          if (!enableHomepage) {
+            manifestWithConfig.catalogs = manifestWithConfig.catalogs.filter(
+              catalog => catalog.id !== 'aisearch.recommend'
+            );
+          }
+          manifestWithConfig.behaviorHints = {
+            ...manifestWithConfig.behaviorHints,
+            configurationRequired: !encryptedConfig,
+          };
           res.setHeader("Access-Control-Allow-Origin", "*");
           res.setHeader("Content-Type", "application/json");
           res.send(JSON.stringify(manifestWithConfig));
@@ -1260,494 +1277,135 @@ async function startServer() {
       }
     );
 
-    app.use(["/validate", "/aisearch/validate"], (req, res, next) => {
-      res.header("Access-Control-Allow-Origin", "*");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+app.use(["/validate", "/aisearch/validate"], (req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
-      if (req.method === "OPTIONS") {
-        return res.sendStatus(200);
-      }
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
-      next();
-    });
+app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const {
+      GeminiApiKey,
+      TmdbApiKey,
+      GeminiModel,
+      TraktAccessToken,
+    } = req.body;
+    
+    const validationResults = {
+      gemini: false,
+      tmdb: false,
+      trakt: true,
+      errors: {},
+    };
+    
+    const modelToUse = GeminiModel || "gemini-2.5-flash-lite";
 
-    app.post("/aisearch/validate", express.json(), async (req, res) => {
-      const startTime = Date.now();
-      try {
-        const {
-          GeminiApiKey,
-          TmdbApiKey,
-          GeminiModel,
-          TraktAccessToken,
-          TraktRefreshToken,
-        } = req.body;
-        const validationResults = {
-          gemini: false,
-          tmdb: false,
-          trakt: true,
-          errors: {},
-        };
-        const modelToUse = GeminiModel || "gemini-2.0-flash";
+    if (ENABLE_LOGGING) {
+      logger.debug("Validation request received", {
+        path: req.path,
+        hasGeminiKey: !!GeminiApiKey,
+        hasTmdbKey: !!TmdbApiKey,
+        hasTraktToken: !!TraktAccessToken,
+      });
+    }
 
-        if (ENABLE_LOGGING) {
-          logger.debug("Validation request received", {
-            timestamp: new Date().toISOString(),
-            requestId: req.id || Math.random().toString(36).substring(7),
-            geminiKeyLength: GeminiApiKey?.length || 0,
-            tmdbKeyLength: TmdbApiKey?.length || 0,
-            hasTraktConfig: !!TraktAccessToken,
-            geminiModel: modelToUse,
-            geminiKeyMasked: GeminiApiKey
-              ? `${GeminiApiKey.slice(0, 4)}...${GeminiApiKey.slice(-4)}`
-              : null,
-            tmdbKeyMasked: TmdbApiKey
-              ? `${TmdbApiKey.slice(0, 4)}...${TmdbApiKey.slice(-4)}`
-              : null,
-          });
-        }
+    const validations = [];
 
-        // Validate TMDB key
+    // Gemini Validation
+    if (GeminiApiKey) {
+      validations.push((async () => {
         try {
-          const tmdbUrl = `https://api.themoviedb.org/3/authentication/token/new?api_key=${TmdbApiKey}&language=en-US`;
-          if (ENABLE_LOGGING) {
-            logger.debug("Making TMDB validation request", {
-              url: tmdbUrl.replace(TmdbApiKey, "***"),
-              method: "GET",
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          const tmdbStartTime = Date.now();
-          const tmdbResponse = await fetch(tmdbUrl);
-          const tmdbData = await tmdbResponse.json();
-          const tmdbDuration = Date.now() - tmdbStartTime;
-
-          if (ENABLE_LOGGING) {
-            logger.debug("TMDB validation response", {
-              status: tmdbResponse.status,
-              success: tmdbData.success,
-              duration: `${tmdbDuration}ms`,
-              payload: {
-                ...tmdbData,
-                request_token: tmdbData.request_token ? "***" : undefined, // Mask sensitive data
-              },
-              headers: {
-                contentType: tmdbResponse.headers.get("content-type"),
-                server: tmdbResponse.headers.get("server"),
-              },
-            });
-          }
-
-          validationResults.tmdb = tmdbData.success === true;
-          if (!validationResults.tmdb) {
-            validationResults.errors.tmdb = "Invalid TMDB API key";
-          }
-        } catch (error) {
-          if (ENABLE_LOGGING) {
-            logger.error("TMDB validation error:", {
-              error: error.message,
-              stack: error.stack,
-              timestamp: new Date().toISOString(),
-            });
-          }
-          validationResults.errors.tmdb = "TMDB API validation failed";
-        }
-
-        // Validate Gemini key
-        try {
-          if (ENABLE_LOGGING) {
-            logger.debug("Initializing Gemini validation", {
-              timestamp: new Date().toISOString(),
-              model: modelToUse,
-            });
-          }
-
           const { GoogleGenerativeAI } = require("@google/generative-ai");
           const genAI = new GoogleGenerativeAI(GeminiApiKey);
           const model = genAI.getGenerativeModel({ model: modelToUse });
-          const prompt = "Test prompt for validation.";
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Making Gemini validation request", {
-              model: modelToUse,
-              promptLength: prompt.length,
-              prompt: prompt,
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          const geminiStartTime = Date.now();
-          const result = await model.generateContent(prompt);
-          const geminiDuration = Date.now() - geminiStartTime;
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Gemini raw response", {
-              timestamp: new Date().toISOString(),
-              response: JSON.stringify(result, null, 2),
-              candidates: result.response?.candidates,
-              promptFeedback: result.response?.promptFeedback,
-            });
-          }
-
-          const responseText =
-            result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Gemini validation response", {
-              hasResponse: !!result,
-              responseLength: responseText.length,
-              duration: `${geminiDuration}ms`,
-              payload: {
-                text: responseText,
-                finishReason:
-                  result?.response?.promptFeedback?.blockReason || "completed",
-                safetyRatings: result?.response?.candidates?.[0]?.safetyRatings,
-                citationMetadata:
-                  result?.response?.candidates?.[0]?.citationMetadata,
-                finishMessage: result?.response?.candidates?.[0]?.finishMessage,
-              },
-              status: {
-                code: result?.response?.candidates?.[0]?.status?.code,
-                message: result?.response?.candidates?.[0]?.status?.message,
-              },
-            });
-          }
-
-          validationResults.gemini = responseText.length > 0;
-          if (!validationResults.gemini) {
-            validationResults.errors.gemini =
-              "Invalid Gemini API key - No response text received";
-          }
-        } catch (error) {
-          if (ENABLE_LOGGING) {
-            logger.error("Gemini validation error:", {
-              error: error.message,
-              stack: error.stack,
-              timestamp: new Date().toISOString(),
-            });
-          }
-          validationResults.errors.gemini = `Invalid Gemini API key: ${error.message}`;
-        }
-
-        // Validate Trakt configuration if provided
-        if (TraktAccessToken) {
-          try {
-            const traktResponse = await fetch(`${TRAKT_API_BASE}/users/me`, {
-              headers: {
-                "Content-Type": "application/json",
-                "trakt-api-version": "2",
-                "trakt-api-key": TRAKT_CLIENT_ID,
-                Authorization: `Bearer ${TraktAccessToken}`,
-              },
-            });
-
-            if (!traktResponse.ok) {
-              validationResults.trakt = false;
-              validationResults.errors.trakt = "Invalid Trakt.tv access token";
-            }
-          } catch (error) {
-            validationResults.trakt = false;
-            validationResults.errors.trakt = "Trakt.tv API validation failed";
-          }
-        }
-
-        if (ENABLE_LOGGING) {
-          logger.debug("API key validation results:", {
-            tmdbValid: validationResults.tmdb,
-            geminiValid: validationResults.gemini,
-            traktValid: validationResults.trakt,
-            errors: validationResults.errors,
-            totalDuration: `${Date.now() - startTime}ms`,
-            timestamp: new Date().toISOString(),
-          });
-        }
-
-        res.json(validationResults);
-      } catch (error) {
-        if (ENABLE_LOGGING) {
-          logger.error("Validation endpoint error:", {
-            error: error.message,
-            stack: error.stack,
-            duration: `${Date.now() - startTime}ms`,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        res.status(500).json({
-          error: "Validation failed",
-          message: error.message,
-        });
-      }
-    });
-
-    app.get("/validate", (req, res) => {
-      res.send(`
-        <html>
-          <head>
-            <title>API Key Validation</title>
-            <style>
-              body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-              .form-group { margin-bottom: 15px; }
-              label { display: block; margin-bottom: 5px; }
-              input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
-              button { padding: 10px 15px; background: #4CAF50; color: white; border: none; cursor: pointer; }
-              #result { margin-top: 20px; padding: 10px; border: 1px solid #ddd; display: none; }
-            </style>
-          </head>
-          <body>
-            <h1>API Key Validation</h1>
-            <div class="form-group">
-              <label for="geminiKey">Gemini API Key:</label>
-              <input type="text" id="geminiKey" name="GeminiApiKey">
-            </div>
-            <div class="form-group">
-              <label for="tmdbKey">TMDB API Key:</label>
-              <input type="text" id="tmdbKey" name="TmdbApiKey">
-            </div>
-            <button onclick="validateKeys()">Validate Keys</button>
-            <div id="result"></div>
-            
-            <script>
-              async function validateKeys() {
-                const geminiKey = document.getElementById('geminiKey').value;
-                const tmdbKey = document.getElementById('tmdbKey').value;
-                
-                if (!geminiKey || !tmdbKey) {
-                  alert('Please enter both API keys');
-                  return;
-                }
-                
-                document.getElementById('result').style.display = 'block';
-                document.getElementById('result').innerHTML = 'Validating...';
-                
-                try {
-                  const response = await fetch('/validate', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      GeminiApiKey: geminiKey,
-                      TmdbApiKey: tmdbKey
-                    })
-                  });
-                  
-                  const data = await response.json();
-                  document.getElementById('result').innerHTML = JSON.stringify(data, null, 2);
-                } catch (error) {
-                  document.getElementById('result').innerHTML = 'Error: ' + error.message;
-                }
-              }
-            </script>
-          </body>
-        </html>
-      `);
-    });
-
-    app.get("/aisearch/validate", (req, res) => {
-      res.redirect("/validate");
-    });
-
-    app.post("/validate", express.json(), async (req, res) => {
-      const startTime = Date.now();
-      try {
-        const {
-          GeminiApiKey,
-          TmdbApiKey,
-          GeminiModel,
-          TraktAccessToken,
-          TraktRefreshToken,
-        } = req.body;
-        const validationResults = {
-          gemini: false,
-          tmdb: false,
-          trakt: true,
-          errors: {},
-        };
-        const modelToUse = GeminiModel || "gemini-2.0-flash";
-
-        if (ENABLE_LOGGING) {
-          logger.debug("Validation request received", {
-            timestamp: new Date().toISOString(),
-            requestId: req.id || Math.random().toString(36).substring(7),
-            geminiKeyLength: GeminiApiKey?.length || 0,
-            tmdbKeyLength: TmdbApiKey?.length || 0,
-            hasTraktConfig: !!TraktAccessToken,
-            geminiModel: modelToUse,
-            geminiKeyMasked: GeminiApiKey
-              ? `${GeminiApiKey.slice(0, 4)}...${GeminiApiKey.slice(-4)}`
-              : null,
-            tmdbKeyMasked: TmdbApiKey
-              ? `${TmdbApiKey.slice(0, 4)}...${TmdbApiKey.slice(-4)}`
-              : null,
-          });
-        }
-
-        // Validate TMDB key
-        try {
-          const tmdbUrl = `https://api.themoviedb.org/3/authentication/token/new?api_key=${TmdbApiKey}&language=en-US`;
-          if (ENABLE_LOGGING) {
-            logger.debug("Making TMDB validation request", {
-              url: tmdbUrl.replace(TmdbApiKey, "***"),
-              method: "GET",
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          const tmdbStartTime = Date.now();
-          const tmdbResponse = await fetch(tmdbUrl);
-          const tmdbData = await tmdbResponse.json();
-          const tmdbDuration = Date.now() - tmdbStartTime;
-
-          if (ENABLE_LOGGING) {
-            logger.debug("TMDB validation response", {
-              status: tmdbResponse.status,
-              success: tmdbData.success,
-              duration: `${tmdbDuration}ms`,
-              payload: {
-                ...tmdbData,
-                request_token: tmdbData.request_token ? "***" : undefined, // Mask sensitive data
-              },
-              headers: {
-                contentType: tmdbResponse.headers.get("content-type"),
-                server: tmdbResponse.headers.get("server"),
-              },
-            });
-          }
-
-          validationResults.tmdb = tmdbData.success === true;
-          if (!validationResults.tmdb) {
-            validationResults.errors.tmdb = "Invalid TMDB API key";
-          }
-        } catch (error) {
-          if (ENABLE_LOGGING) {
-            logger.error("TMDB validation error:", {
-              error: error.message,
-              stack: error.stack,
-              timestamp: new Date().toISOString(),
-            });
-          }
-          validationResults.errors.tmdb = "TMDB API validation failed";
-        }
-
-        // Validate Gemini key
-        try {
-          if (ENABLE_LOGGING) {
-            logger.debug("Initializing Gemini validation", {
-              timestamp: new Date().toISOString(),
-              model: modelToUse,
-            });
-          }
-
-          const { GoogleGenerativeAI } = require("@google/generative-ai");
-          const genAI = new GoogleGenerativeAI(GeminiApiKey);
-          const model = genAI.getGenerativeModel({ model: modelToUse });
-          const prompt = "Test prompt for validation.";
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Making Gemini validation request", {
-              model: modelToUse,
-              promptLength: prompt.length,
-              prompt: prompt,
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          const geminiStartTime = Date.now();
-          const result = await model.generateContent(prompt);
-          const geminiDuration = Date.now() - geminiStartTime;
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Gemini raw response", {
-              timestamp: new Date().toISOString(),
-              response: JSON.stringify(result, null, 2),
-              candidates: result.response?.candidates,
-              promptFeedback: result.response?.promptFeedback,
-            });
-          }
-
-          const responseText =
-            result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-          if (ENABLE_LOGGING) {
-            logger.debug("Gemini validation response", {
-              hasResponse: !!result,
-              responseLength: responseText.length,
-              duration: `${geminiDuration}ms`,
-              payload: {
-                text: responseText,
-                finishReason:
-                  result?.response?.promptFeedback?.blockReason || "completed",
-                safetyRatings: result?.response?.candidates?.[0]?.safetyRatings,
-                citationMetadata:
-                  result?.response?.candidates?.[0]?.citationMetadata,
-                finishMessage: result?.response?.candidates?.[0]?.finishMessage,
-              },
-              status: {
-                code: result?.response?.candidates?.[0]?.status?.code,
-                message: result?.response?.candidates?.[0]?.status?.message,
-              },
-            });
-          }
-
-          validationResults.gemini = responseText.length > 0;
-          if (!validationResults.gemini) {
-            validationResults.errors.gemini =
-              "Invalid Gemini API key - No response text received";
+          const result = await model.generateContent("Test prompt");
+          const responseText = result.response.text();
+          if (responseText.length > 0) {
+            validationResults.gemini = true;
+          } else {
+            validationResults.errors.gemini = "Invalid Gemini API key - No response";
           }
         } catch (error) {
           validationResults.errors.gemini = `Invalid Gemini API key: ${error.message}`;
         }
+      })());
+    } else {
+       validationResults.errors.gemini = "Gemini API Key is required.";
+    }
 
-        // Validate Trakt configuration if provided
-        if (TraktAccessToken) {
-          try {
-            const traktResponse = await fetch(`${TRAKT_API_BASE}/users/me`, {
-              headers: {
-                "Content-Type": "application/json",
-                "trakt-api-version": "2",
-                "trakt-api-key": TRAKT_CLIENT_ID,
-                Authorization: `Bearer ${TraktAccessToken}`,
-              },
-            });
-
-            if (!traktResponse.ok) {
-              validationResults.trakt = false;
-              validationResults.errors.trakt = "Invalid Trakt.tv access token";
-            }
-          } catch (error) {
-            validationResults.trakt = false;
-            validationResults.errors.trakt = "Trakt.tv API validation failed";
+    // TMDB Validation
+    if (TmdbApiKey) {
+      validations.push((async () => {
+        try {
+          const tmdbUrl = `https://api.themoviedb.org/3/configuration?api_key=${TmdbApiKey}`;
+          const tmdbResponse = await fetch(tmdbUrl);
+          if (tmdbResponse.ok) {
+            validationResults.tmdb = true;
+          } else {
+            validationResults.errors.tmdb = `Invalid TMDB API key (Status: ${tmdbResponse.status})`;
           }
+        } catch (error) {
+          validationResults.errors.tmdb = "TMDB API validation failed";
         }
+      })());
+    } else {
+        validationResults.errors.tmdb = "TMDB API Key is required.";
+    }
 
-        if (ENABLE_LOGGING) {
-          logger.debug("API key validation results:", {
-            tmdbValid: validationResults.tmdb,
-            geminiValid: validationResults.gemini,
-            traktValid: validationResults.trakt,
-            errors: validationResults.errors,
-            totalDuration: `${Date.now() - startTime}ms`,
-            timestamp: new Date().toISOString(),
+    // Trakt Validation (only if token is provided)
+    if (TraktAccessToken) {
+      validations.push((async () => {
+        try {
+          const traktResponse = await fetch(`${TRAKT_API_BASE}/users/me`, {
+            headers: {
+              "Content-Type": "application/json",
+              "trakt-api-version": "2",
+              "trakt-api-key": TRAKT_CLIENT_ID,
+              Authorization: `Bearer ${TraktAccessToken}`,
+            },
           });
+          if (!traktResponse.ok) {
+            validationResults.trakt = false;
+            validationResults.errors.trakt = "Invalid or expired Trakt.tv access token";
+          }
+        } catch (error) {
+          validationResults.trakt = false;
+          validationResults.errors.trakt = "Trakt.tv API validation failed";
         }
+      })());
+    }
+    
+    // Wait for all validations to complete
+    await Promise.all(validations);
 
-        res.json(validationResults);
-      } catch (error) {
-        if (ENABLE_LOGGING) {
-          logger.error("Validation endpoint error:", {
-            error: error.message,
-            stack: error.stack,
-            duration: `${Date.now() - startTime}ms`,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        res.status(500).json({
-          error: "Validation failed",
-          message: error.message,
-        });
-      }
+    if (ENABLE_LOGGING) {
+      logger.debug("API key validation results:", {
+        results: validationResults,
+        duration: `${Date.now() - startTime}ms`,
+      });
+    }
+
+    res.json(validationResults);
+  } catch (error) {
+    if (ENABLE_LOGGING) {
+      logger.error("Validation endpoint error:", {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+    res.status(500).json({
+      error: "Validation failed due to a server error.",
+      message: error.message,
     });
+  }
+});
 
     app.get("/test-crypto", (req, res) => {
       try {

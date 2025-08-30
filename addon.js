@@ -545,30 +545,11 @@ async function fetchTraktWatchedAndRated(
   const makeApiCall = async (url, headers) => {
     const response = await fetch(url, { headers });
 
-    if (response.status === 401 && config?.TraktRefreshToken) {
-      logger.info("Trakt token expired, attempting refresh");
-
-      const newTokens = await refreshTraktToken(
-        config.TraktRefreshToken,
-        clientId,
-        process.env.TRAKT_CLIENT_SECRET
+    if (response.status === 401) {
+      logger.warn(
+        "Trakt access token is expired. Personalized recommendations will be unavailable until the user updates their configuration."
       );
-
-      if (newTokens?.access_token) {
-        logger.info("Token refresh successful");
-        config.TraktAccessToken = newTokens.access_token;
-        if (newTokens.refresh_token) {
-          config.TraktRefreshToken = newTokens.refresh_token;
-        }
-
-        const newHeaders = {
-          ...headers,
-          Authorization: `Bearer ${newTokens.access_token}`,
-        };
-        return await fetch(url, { headers: newHeaders });
-      }
     }
-
     return response;
   };
 
@@ -1239,6 +1220,16 @@ const manifest = {
       name: "AI Series Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
+    },
+    {
+      type: "movie",
+      id: "aisearch.recommend",
+      name: "AI Movie Recommendations",
+    },
+    {
+      type: "series",
+      id: "aisearch.recommend",
+      name: "AI Series Recommendations",
     },
     {
       type: "movie",
@@ -2621,25 +2612,102 @@ function detectPlatform(extra = {}) {
   return "unknown";
 }
 
+// Creative recommendation prompts
+const movieRecommendationPrompts = [
+  "Recommend a hidden gem movie.",
+  "Show me some critically acclaimed films.",
+  "What's a good movie to watch this weekend?",
+  "Recommend a mind-bending thriller movie.",
+  "Find me a feel-good comedy movie.",
+  "Recommend movies that won Best Picture.",
+  "Show me some popular movies from the 90s.",
+  "Recommend an epic fantasy adventure film.",
+  "Recommend a movie with a great twist ending.",
+  "Recommend a visually stunning sci-fi movie.",
+  "Show me a great foreign language film.",
+  "What are some top-rated animated movies for adults?",
+  "Recommend a compelling documentary movie.",
+  "Find a cult classic I might have missed.",
+  "Recommend a gritty neo-noir film.",
+  "Show me the best action-comedies.",
+  "What are some essential 80s movies?",
+  "Recommend a slow-burn horror movie.",
+  "Find an uplifting and inspiring movie based on a true story.",
+  "Show me some great heist movies.",
+  "Recommend an intelligent courtroom drama.",
+  "What's a cinematic masterpiece I should see?",
+  "Recommend a movie with a fantastic original score.",
+  "Find a modern Western film.",
+  "Show me movies with an unreliable narrator.",
+  "Recommend a thought-provoking movie about artificial intelligence.",
+  "Find some great coming-of-age films.",
+  "Show me the best international thrillers.",
+  "Recommend an underrated science fiction movie from the 2000s.",
+  "What's a good movie for a rainy day?",
+  "Find movies that are visually breathtaking.",
+  "Recommend a satirical dark comedy.",
+  "Show me some essential independent films from the last 5 years.",
+  "What are some great space exploration movies?",
+  "Recommend a movie that's a single, continuous shot.",
+  "Find a movie that will make me think for days.",
+  "Show me a great war movie that isn't about WWII.",
+  "Recommend a high-concept sci-fi film.",
+  "Find a charming romantic comedy that isn't cheesy.",
+];
+
+const seriesRecommendationPrompts = [
+  "Recommend a binge-worthy series.",
+  "Show me a limited series with a satisfying ending.",
+  "What's a great TV show to start now?",
+  "Recommend a gripping crime drama series.",
+  "Find me a lighthearted and funny sitcom.",
+  "Recommend a TV show with amazing world-building.",
+  "Show me a popular series from the last decade.",
+  "Recommend an epic historical drama series.",
+  "Recommend a series with a strong ensemble cast.",
+  "Find a great animated series for adults.",
+  "Show me a thought-provoking science fiction series.",
+  "Recommend a high-quality reality TV show.",
+  "What are some of the best fantasy TV series?",
+  "Recommend a compelling documentary series.",
+  "Find a cozy and comforting show to watch.",
+  "Recommend a sharp and witty political satire.",
+  "Show me a great series I can finish in a weekend.",
+  "What's a classic TV show that still holds up?",
+  "Recommend a series with a brilliant anti-hero.",
+  "Find an excellent workplace comedy.",
+  "Show me some top-tier British crime shows.",
+  "Recommend a supernatural teen drama.",
+  "Find a TV show with a unique premise.",
+  "What are the best Scandinavian noir series?",
+  "Recommend a mockumentary-style comedy.",
+  "Show me a high-stakes espionage thriller series.",
+  "Find a critically acclaimed anthology series.",
+  "Recommend a series with strong female leads.",
+  "What's a good 'monster of the week' show?",
+  "Find a period drama with modern sensibilities.",
+  "Show me an epic, long-running series to get lost in.",
+  "Recommend a family saga TV show.",
+  "Find a procedural drama that breaks the mold.",
+  "What's a great K-Drama for beginners?",
+  "Recommend a series that's a slow burn but worth it.",
+  "Show me a series that everyone was talking about last year.",
+  "Find a show that's perfect for background watching.",
+  "Recommend a great medical drama.",
+  "What are some mind-bending shows about time travel?",
+  "Show me a great animated show for the whole family.",
+];
+
 const catalogHandler = async function (args, req) {
   const startTime = Date.now();
   const { id, type, extra } = args;
+  let isHomepageQuery = false;
 
   let searchQuery = "";
   if (typeof extra === "string" && extra.includes("search=")) {
     searchQuery = decodeURIComponent(extra.split("search=")[1]);
   } else if (extra?.search) {
     searchQuery = extra.search;
-  }
-
-  if (!searchQuery) {
-    if (id == "aisearch.recommend") {
-      searchQuery = "Recommend";
-    } else {
-      logger.error("No search query provided");
-      logger.emptyCatalog("No search query provided", { type, extra });
-      return { metas: [] };
-    }
   }
 
   try {
@@ -2665,6 +2733,45 @@ const catalogHandler = async function (args, req) {
     }
 
     const configData = JSON.parse(decryptedConfigStr);
+
+    if (!searchQuery) {
+      if (id === "aisearch.recommend") {
+        isHomepageQuery = true;
+        const customHomepageQuery = configData.HomepageQuery;
+
+        // Prioritize user's custom homepage query
+        if (customHomepageQuery && customHomepageQuery.trim() !== "") {
+          searchQuery = customHomepageQuery.trim();
+          logger.info("Using user-defined homepage query", {
+            type,
+            query: searchQuery,
+          });
+        } else {
+          // Fallback to existing random prompt logic
+          if (type === "movie") {
+            const randomIndex = Math.floor(
+              Math.random() * movieRecommendationPrompts.length
+            );
+            searchQuery = movieRecommendationPrompts[randomIndex];
+          } else if (type === "series") {
+            const randomIndex = Math.floor(
+              Math.random() * seriesRecommendationPrompts.length
+            );
+            searchQuery = seriesRecommendationPrompts[randomIndex];
+          } else {
+            searchQuery = "Recommend something great to watch.";
+          }
+          logger.info("Using dynamic recommendation query", {
+            type,
+            query: searchQuery,
+          });
+        }
+      } else {
+        logger.error("No search query provided");
+        logger.emptyCatalog("No search query provided", { type, extra });
+        return { metas: [] };
+      }
+    }
 
     // Log the Trakt configuration
     logger.info("Trakt configuration", {
@@ -3381,7 +3488,12 @@ const catalogHandler = async function (args, req) {
     }`;
 
     // Only check cache if there's no Trakt data or if it's not a recommendation query
-    if (enableAiCache && !traktData && aiRecommendationsCache.has(cacheKey)) {
+    if (
+      enableAiCache &&
+      !traktData &&
+      !isHomepageQuery &&
+      aiRecommendationsCache.has(cacheKey)
+    ) {
       const cached = aiRecommendationsCache.get(cacheKey);
 
       logger.info("AI recommendations cache hit", {
@@ -3994,45 +4106,45 @@ const catalogHandler = async function (args, req) {
         }
       }
 
-      // Only cache if there's no Trakt data (not user-specific)
-      if (!traktData) {
+      // Only cache if there's no Trakt data (not user-specific) and it's not a homepage query
+      if (!traktData && !isHomepageQuery && enableAiCache) {
         aiRecommendationsCache.set(cacheKey, {
           timestamp: Date.now(),
           data: finalResult,
           configNumResults: numResults,
         });
 
-        if (enableAiCache) {
-          logger.debug("AI recommendations result cached and used", {
-            cacheKey,
+        logger.debug("AI recommendations result cached", {
+          cacheKey,
+          duration: Date.now() - startTime,
+          query: searchQuery,
+          type,
+          numResults,
+        });
+      } else {
+        // Log the reason for not caching
+        if (isHomepageQuery) {
+          logger.debug("AI recommendations not cached (dynamic homepage query)", {
             duration: Date.now() - startTime,
             query: searchQuery,
             type,
-            numResults,
           });
-        } else {
+        } else if (traktData) {
           logger.debug(
-            "AI recommendations result cached but not used (caching disabled for this user)",
+            "AI recommendations not cached (user-specific Trakt data)",
             {
-              cacheKey,
               duration: Date.now() - startTime,
               query: searchQuery,
               type,
-              numResults,
             }
           );
-        }
-      } else {
-        logger.debug(
-          "AI recommendations with Trakt data not cached (user-specific)",
-          {
-            duration: Date.now() - startTime,
+        } else if (!enableAiCache) {
+          logger.debug("AI recommendations not cached (disabled in config)", {
+            cacheKey,
             query: searchQuery,
             type,
-            numResults,
-            hasTraktData: true,
-          }
-        );
+          });
+        }
       }
 
       // Convert recommendations to Stremio meta objects

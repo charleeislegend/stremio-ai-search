@@ -600,6 +600,27 @@
             </div>
           </div>
 
+          <!-- Disable homepage AI recommendations -->
+          <div class="form-group">
+            <div class="checkbox-container">
+              <input type="checkbox" id="enableHomepage" checked />
+              <label for="enableHomepage">Show AI Recommendations on Homepage</label>
+            </div>
+            <div class="help-text">
+              If disabled, the AI recommendation catalogs will not appear on
+              your Stremio homepage.
+            </div>
+          </div>
+
+          <!-- Custom Homepage Query Input - Initially Hidden -->
+          <div class="form-group" id="homepageQueryGroup" style="display: none;">
+              <label class="form-label" for="homepageQuery">Custom Homepage Query (Optional)</label>
+              <input type="text" id="homepageQuery" placeholder="e.g., 'latest sci-fi movies'">
+              <div class="help-text">
+                  Override the default random recommendations with your own query for the homepage catalogs.
+              </div>
+          </div>
+
           <!-- Group all RPDB settings together -->
           <div class="form-group">
             <div class="checkbox-container">
@@ -1057,18 +1078,14 @@
           const geminiKey = document.getElementById("geminiKey").value.trim();
           const tmdbKey = document.getElementById("tmdbKey").value.trim();
           const rpdbKey = document.getElementById("rpdbKey").value.trim();
-          const rpdbPosterType =
-            document.getElementById("rpdbPosterType").value;
+          const rpdbPosterType = document.getElementById("rpdbPosterType").value;
           const tmdbLanguage = document.getElementById("tmdbLanguage").value;
           const numResults = document.getElementById("numResults").value.trim();
-          const traktAccessToken = document
-            .getElementById("traktAccessToken")
-            .value.trim();
-          const existingConfigId =
-            document.getElementById("existingConfigId").value;
-          // NEW: Read the state of the RPDB enable checkbox
-          const enableRpdb =
-            document.getElementById("enableRpdbPosters").checked;
+          const traktAccessToken = document.getElementById("traktAccessToken").value.trim();
+          const existingConfigId = document.getElementById("existingConfigId").value;
+          const enableRpdb = document.getElementById("enableRpdbPosters").checked;
+          const enableHomepage = document.getElementById("enableHomepage").checked;
+          const homepageQuery = document.getElementById("homepageQuery").value.trim();
 
           // Basic validation
           if (!geminiKey || geminiKey.length < 10) {
@@ -1100,9 +1117,14 @@
               EnableAiCache: document.getElementById("enableAiCache").checked,
               TmdbLanguage: tmdbLanguage,
               GeminiModel: document.getElementById("geminiModel").value,
-              // NEW: Add EnableRpdb flag to config
               EnableRpdb: enableRpdb,
+              EnableHomepage: enableHomepage,
             };
+
+            // Only add homepage query if homepage is enabled and query is not empty
+            if (enableHomepage && homepageQuery) {
+              config.HomepageQuery = homepageQuery;
+            }
 
             // Only add RPDB poster type if RPDB is enabled
             if (enableRpdb) {
@@ -1292,6 +1314,12 @@
         });
       }
 
+      function toggleHomepageQueryVisibility() {
+        const enableHomepage = document.getElementById('enableHomepage').checked;
+        const homepageQueryGroup = document.getElementById('homepageQueryGroup');
+        homepageQueryGroup.style.display = enableHomepage ? 'block' : 'none';
+      }
+
       // Initialize the advanced section to be hidden on page load
       document.addEventListener("DOMContentLoaded", function () {
         document.getElementById("advancedOptions").style.display = "none";
@@ -1303,6 +1331,10 @@
             const advancedSection = document.getElementById("advancedOptions");
             advancedSection.style.display = this.checked ? "block" : "none";
           });
+
+        // Show/hide homepage query input based on checkbox state
+        toggleHomepageQueryVisibility(); // Set initial state on load
+        document.getElementById('enableHomepage').addEventListener('change', toggleHomepageQueryVisibility);
 
         // Check if we're in edit mode (URL contains a config ID)
         const path = window.location.pathname;
@@ -1376,8 +1408,6 @@
               if (config.GeminiModel)
                 document.getElementById("geminiModel").value =
                   config.GeminiModel;
-
-              // NEW: Set the RPDB enable checkbox state
               if (config.EnableRpdb !== undefined) {
                 document.getElementById("enableRpdbPosters").checked =
                   config.EnableRpdb;
@@ -1385,6 +1415,16 @@
                 // Default to checked if RpdbApiKey exists but EnableRpdb flag is missing (older configs)
                 document.getElementById("enableRpdbPosters").checked =
                   !!config.RpdbApiKey;
+              }
+              if (config.EnableHomepage !== undefined) {
+                document.getElementById("enableHomepage").checked = config.EnableHomepage;
+              } else {
+                // For older configs that don't have this setting, default it to true
+                document.getElementById("enableHomepage").checked = true;
+              }
+
+              if (config.HomepageQuery) {
+                  document.getElementById("homepageQuery").value = config.HomepageQuery;
               }
 
               // Call toggleRpdbFields *after* setting the checkbox state and API key
@@ -1450,7 +1490,7 @@
           updateTraktStatus(
             "Connected to Trakt.tv",
             "#2a5a2a",
-            "Successfully connected to Trakt.tv! Your recommendations will now be personalized based on your watch history.<br /><small>Note: You'll need to re-authenticate every 90 days for security reasons.</small>"
+            "Successfully connected to Trakt.tv! <strong>Click 'Update Configuration in Stremio' below to save your settings.</strong>"
           );
         }
       });
@@ -1503,7 +1543,7 @@
             updateTraktStatus(
               "Connected to Trakt.tv",
               "#2a5a2a",
-              "Successfully connected to Trakt.tv! Your recommendations will now be personalized based on your watch history.<br /><small>Note: You'll need to re-authenticate every 90 days for security reasons.</small>"
+              "Successfully connected to Trakt.tv! <strong>Click 'Update Configuration in Stremio' below to save your settings.</strong>"
             );
             return;
           }
@@ -1529,10 +1569,13 @@
                 document.getElementById("traktRefreshToken").value =
                   newTokens.refresh_token;
               }
+              document.getElementById("configureBtn").textContent = "Save Refreshed Token";
+              document.getElementById("copyBtn").textContent = "Copy URL with Refreshed Token";
+              
               updateTraktStatus(
-                "Connected to Trakt.tv",
-                "#2a5a2a",
-                "Token refreshed successfully! Your recommendations will now be personalized based on your watch history.<br /><small>Note: You'll need to re-authenticate every 90 days for security reasons.</small>"
+                "Token Refreshed - PLEASE SAVE",
+                "#e67e22",
+                "Your Trakt.tv session was successfully refreshed. <strong>You MUST click 'Save Refreshed Token' below to save these changes.</strong>"
               );
               return;
             }
@@ -1586,6 +1629,8 @@
           traktRefreshToken: document.getElementById("traktRefreshToken").value,
           enableRpdbPosters:
             document.getElementById("enableRpdbPosters").checked,
+          enableHomepage: document.getElementById("enableHomepage").checked,
+          homepageQuery: document.getElementById("homepageQuery").value,
         };
         sessionStorage.setItem("formData", JSON.stringify(formData));
 
@@ -1636,7 +1681,14 @@
             formData.enableRpdbPosters !== false; // Default to true if not explicitly false
           // Call toggleRpdbFields *after* restoring state
           toggleRpdbFields();
-
+          // Restore Homepage recommendation state
+          document.getElementById("enableHomepage").checked =
+            formData.enableHomepage !== false;
+          if (formData.homepageQuery) {
+              document.getElementById("homepageQuery").value = formData.homepageQuery;
+          }
+          // Call toggleHomepageQueryVisibility *after* restoring state
+          toggleHomepageQueryVisibility();
           // Restore Trakt token if it exists
           if (formData.traktAccessToken) {
             document.getElementById("traktAccessToken").value =
