@@ -600,6 +600,17 @@
             </div>
           </div>
 
+          <!-- Adult recommendations -->
+          <div class="form-group">
+            <div class="checkbox-container">
+              <input type="checkbox" id="includeAdult" />
+              <label for="includeAdult">Include Adult (18+) Content</label>
+            </div>
+            <div class="help-text">
+              If checked, search results may include adult-rated content from TMDB.
+            </div>
+          </div>
+
           <!-- Disable homepage AI recommendations -->
           <div class="form-group">
             <div class="checkbox-container">
@@ -1086,6 +1097,7 @@
           const enableRpdb = document.getElementById("enableRpdbPosters").checked;
           const enableHomepage = document.getElementById("enableHomepage").checked;
           const homepageQuery = document.getElementById("homepageQuery").value.trim();
+          const includeAdult = document.getElementById("includeAdult").checked;
 
           // Basic validation
           if (!geminiKey || geminiKey.length < 10) {
@@ -1119,6 +1131,7 @@
               GeminiModel: document.getElementById("geminiModel").value,
               EnableRpdb: enableRpdb,
               EnableHomepage: enableHomepage,
+              IncludeAdult: includeAdult,
             };
 
             // Only add homepage query if homepage is enabled and query is not empty
@@ -1423,6 +1436,10 @@
                 document.getElementById("enableHomepage").checked = true;
               }
 
+              if (config.IncludeAdult !== undefined)
+                document.getElementById("includeAdult").checked =
+                  config.IncludeAdult;
+
               if (config.HomepageQuery) {
                   document.getElementById("homepageQuery").value = config.HomepageQuery;
               }
@@ -1631,6 +1648,7 @@
             document.getElementById("enableRpdbPosters").checked,
           enableHomepage: document.getElementById("enableHomepage").checked,
           homepageQuery: document.getElementById("homepageQuery").value,
+          includeAdult: document.getElementById("includeAdult").checked,
         };
         sessionStorage.setItem("formData", JSON.stringify(formData));
 
@@ -1687,6 +1705,7 @@
           if (formData.homepageQuery) {
               document.getElementById("homepageQuery").value = formData.homepageQuery;
           }
+          document.getElementById("includeAdult").checked = !!formData.includeAdult;
           // Call toggleHomepageQueryVisibility *after* restoring state
           toggleHomepageQueryVisibility();
           // Restore Trakt token if it exists

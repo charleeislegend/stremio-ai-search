@@ -706,10 +706,10 @@ async function fetchTraktWatchedAndRated(
   return result;
 }
 
-async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
+async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includeAdult = false) {
   const startTime = Date.now();
-  logger.debug("Starting TMDB search", { title, type, year });
-  const cacheKey = `${title}-${type}-${year}-${language}`;
+  logger.debug("Starting TMDB search", { title, type, year, includeAdult });
+  const cacheKey = `${title}-${type}-${year}-${language}-adult:${includeAdult}`;
 
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
@@ -736,7 +736,7 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
       api_key: tmdbKey,
       query: title,
       year: year,
-      include_adult: true,
+      include_adult: includeAdult,
       language: language,
     });
 
@@ -988,10 +988,10 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
   }
 }
 
-async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US") {
+async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", includeAdult = false) {
   const startTime = Date.now();
-  logger.debug("Starting TMDB exact match search", { title, type });
-  const cacheKey = `exact_${title}-${type}-${language}`;
+  logger.debug("Starting TMDB exact match search", { title, type, includeAdult });
+  const cacheKey = `exact_${title}-${type}-${language}-adult:${includeAdult}`;
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
     logger.info("TMDB exact match cache hit", {
@@ -1016,7 +1016,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US") {
     const searchParams = new URLSearchParams({
       api_key: tmdbKey,
       query: title,
-      include_adult: true,
+      include_adult: includeAdult,
       language: language,
     });
     const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
@@ -1721,7 +1721,8 @@ async function toStremioMeta(
   rpdbKey,
   rpdbPosterType = "poster-default",
   language = "en-US",
-  config
+  config,
+  includeAdult = false
 ) {
   if (!item.id || !item.name) {
     return null;
@@ -1737,12 +1738,13 @@ async function toStremioMeta(
   const userTier = usingUserKey ? getRpdbTierFromApiKey(userRpdbKey) : -1;
   const isTier0User = (usingUserKey && userTier === 0) || usingDefaultKey;
 
-  const tmdbData = await searchTMDB(
+const tmdbData = await searchTMDB(
     item.name,
     type,
     item.year,
     tmdbKey,
-    language
+    language,
+    includeAdult
   );
 
   if (!tmdbData || !tmdbData.imdb_id) {
@@ -2085,6 +2087,7 @@ const catalogHandler = async function (args, req) {
     // NEW: Read the EnableRpdb flag
     const enableRpdb =
       configData.EnableRpdb !== undefined ? configData.EnableRpdb : false;
+    const includeAdult = configData.IncludeAdult === true;
 
     if (ENABLE_LOGGING) {
       logger.debug("Catalog handler config", {
@@ -2097,7 +2100,8 @@ const catalogHandler = async function (args, req) {
         isDefaultRpdbKey: rpdbKey === DEFAULT_RPDB_KEY,
         rpdbPosterType: rpdbPosterType,
         enableAiCache: enableAiCache,
-        enableRpdb: enableRpdb, // Log the new flag
+        enableRpdb: enableRpdb,
+        includeAdult: includeAdult,
         geminiModel: geminiModel,
         language: language,
         hasTraktClientId: !!DEFAULT_TRAKT_CLIENT_ID,
@@ -2150,7 +2154,8 @@ const catalogHandler = async function (args, req) {
         searchQuery,
         type,
         tmdbKey,
-        language
+        language,
+        includeAdult
       );
       if (exactMatchData && exactMatchData.imdb_id) {
         const exactMatchItem = {
@@ -2168,7 +2173,8 @@ const catalogHandler = async function (args, req) {
           rpdbKey,
           rpdbPosterType,
           language,
-          configData
+          configData,
+          includeAdult
         );
         if (exactMatchMeta) {
           logger.info("TMDB exact match found and converted to meta", {
@@ -2351,7 +2357,8 @@ const catalogHandler = async function (args, req) {
             rpdbKey,
             rpdbPosterType,
             language,
-            configData // Pass the whole config down
+            configData,
+            includeAdult
           )
         );
 
