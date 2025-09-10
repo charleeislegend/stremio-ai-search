@@ -706,10 +706,10 @@ async function fetchTraktWatchedAndRated(
   return result;
 }
 
-async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
+async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includeAdult = false) {
   const startTime = Date.now();
-  logger.debug("Starting TMDB search", { title, type, year });
-  const cacheKey = `${title}-${type}-${year}-${language}`;
+  logger.debug("Starting TMDB search", { title, type, year, includeAdult });
+  const cacheKey = `${title}-${type}-${year}-${language}-adult:${includeAdult}`;
 
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
@@ -736,7 +736,7 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
       api_key: tmdbKey,
       query: title,
       year: year,
-      include_adult: false,
+      include_adult: includeAdult,
       language: language,
     });
 
@@ -988,10 +988,10 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
   }
 }
 
-async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US") {
+async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", includeAdult = false) {
   const startTime = Date.now();
-  logger.debug("Starting TMDB exact match search", { title, type });
-  const cacheKey = `exact_${title}-${type}-${language}`;
+  logger.debug("Starting TMDB exact match search", { title, type, includeAdult });
+  const cacheKey = `exact_${title}-${type}-${language}-adult:${includeAdult}`;
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
     logger.info("TMDB exact match cache hit", {
@@ -1016,7 +1016,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US") {
     const searchParams = new URLSearchParams({
       api_key: tmdbKey,
       query: title,
-      include_adult: false,
+      include_adult: includeAdult,
       language: language,
     });
     const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
@@ -1721,7 +1721,8 @@ async function toStremioMeta(
   rpdbKey,
   rpdbPosterType = "poster-default",
   language = "en-US",
-  config
+  config,
+  includeAdult = false
 ) {
   if (!item.id || !item.name) {
     return null;
@@ -1737,12 +1738,13 @@ async function toStremioMeta(
   const userTier = usingUserKey ? getRpdbTierFromApiKey(userRpdbKey) : -1;
   const isTier0User = (usingUserKey && userTier === 0) || usingDefaultKey;
 
-  const tmdbData = await searchTMDB(
+const tmdbData = await searchTMDB(
     item.name,
     type,
     item.year,
     tmdbKey,
-    language
+    language,
+    includeAdult
   );
 
   if (!tmdbData || !tmdbData.imdb_id) {
@@ -2085,6 +2087,7 @@ const catalogHandler = async function (args, req) {
     // NEW: Read the EnableRpdb flag
     const enableRpdb =
       configData.EnableRpdb !== undefined ? configData.EnableRpdb : false;
+    const includeAdult = configData.IncludeAdult === true;
 
     if (ENABLE_LOGGING) {
       logger.debug("Catalog handler config", {
@@ -2097,7 +2100,8 @@ const catalogHandler = async function (args, req) {
         isDefaultRpdbKey: rpdbKey === DEFAULT_RPDB_KEY,
         rpdbPosterType: rpdbPosterType,
         enableAiCache: enableAiCache,
-        enableRpdb: enableRpdb, // Log the new flag
+        enableRpdb: enableRpdb,
+        includeAdult: includeAdult,
         geminiModel: geminiModel,
         language: language,
         hasTraktClientId: !!DEFAULT_TRAKT_CLIENT_ID,
@@ -2150,7 +2154,8 @@ const catalogHandler = async function (args, req) {
         searchQuery,
         type,
         tmdbKey,
-        language
+        language,
+        includeAdult
       );
       if (exactMatchData && exactMatchData.imdb_id) {
         const exactMatchItem = {
@@ -2168,7 +2173,8 @@ const catalogHandler = async function (args, req) {
           rpdbKey,
           rpdbPosterType,
           language,
-          configData
+          configData,
+          includeAdult
         );
         if (exactMatchMeta) {
           logger.info("TMDB exact match found and converted to meta", {
@@ -2351,7 +2357,8 @@ const catalogHandler = async function (args, req) {
             rpdbKey,
             rpdbPosterType,
             language,
-            configData // Pass the whole config down
+            configData,
+            includeAdult
           )
         );
 
@@ -2603,12 +2610,19 @@ const catalogHandler = async function (args, req) {
           currentYear - 2
         } to ${currentYear})`,
         `  * 'new' or 'latest' means released in ${currentYear}`,
-        "- If this query appears to be for a specific movie (like 'The Matrix', 'Inception'), return only that exact movie and its sequels/prequels if they exist in chronological order.",
-        "- If this query is for movies from a specific franchise (like 'Mission Impossible movies, James Bond movies'), list the official entries in that franchise in chronological order.",
-        "- If this query is for an actor's filmography (like 'Tom Cruise movies'), list diverse notable films featuring that actor.",
-        "- For all other queries, provide diverse recommendations that best match the query.",
-        "- Order your recommendations in the most appropriate way for the query (by relevance, popularity, quality, or other criteria that makes sense).",
+        "SPECIFIC QUERY HANDLING:",
+        "First, determine if the query matches one of the types below. If it does, follow its rules precisely.",
         "",
+        `1. FRANCHISE/SERIES: If the query is for a specific title that is part of a larger series (e.g., 'Shrek', 'The Matrix Reloaded', 'Harry Potter', 'star wars', 'Jurassic Park') or explicitly asks for a franchise ('James Bond movies'), your TOP PRIORITY is to list ALL official mainline movies from that franchise.`,
+        `   - List them first, in STRICT chronological order of release.`,
+        `   - After listing the entire franchise, if you need more results to reach the count of ${numResults}, you may add official spin-offs or highly similar titles.`,
+        "",
+        `2. ACTOR/DIRECTOR/STUDIO FILMOGRAPHY: If the query is for the works of a person or entity (e.g., 'Tom Cruise movies', 'Christopher Nolan films', 'Pixar movies', 'Marvel movies', 'dc universe', 'Fast and Furious franchise'), list their most notable and critically acclaimed works.`,
+        `   - Provide a comprehensive selection covering different genres and eras of their career.`,
+        `   - Order these results chronologically by release year.`,
+        "",
+        `3. GENERAL RECOMMENDATIONS: For ALL other queries, provide diverse recommendations that best match the query's theme, genre, and mood.`,
+        `   - Order these results by their relevance to the query.`,
         "CRITICAL REQUIREMENTS:",
         `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`,
         `- DO NOT recommend any movies that appear in the user's watch history or ratings above.`,
