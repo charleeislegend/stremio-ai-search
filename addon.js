@@ -736,7 +736,7 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US") {
       api_key: tmdbKey,
       query: title,
       year: year,
-      include_adult: false,
+      include_adult: true,
       language: language,
     });
 
@@ -1016,7 +1016,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US") {
     const searchParams = new URLSearchParams({
       api_key: tmdbKey,
       query: title,
-      include_adult: false,
+      include_adult: true,
       language: language,
     });
     const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
