@@ -172,6 +172,11 @@ const rpdbCache = new SimpleLRUCache({
   ttl: RPDB_CACHE_DURATION,
 });
 
+const similarContentCache = new SimpleLRUCache({
+  max: 5000,
+  ttl: AI_CACHE_DURATION,
+});
+
 const HOST = process.env.HOST
   ? `https://${process.env.HOST}`
   : "https://stremio.itcon.au";
@@ -1182,7 +1187,15 @@ const manifest = {
   version: "1.0.0",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
-  resources: ["catalog", "meta"],
+  resources: [
+    "catalog",
+    "meta",
+    {
+      name: "stream",
+      types: ["movie", "series"],
+      idPrefixes: ["tt"]
+    }
+  ],
   types: ["movie", "series"],
   catalogs: [
     {
@@ -1198,16 +1211,6 @@ const manifest = {
       name: "AI Series Search",
       extra: [{ name: "search", isRequired: true }],
       isSearch: true,
-    },
-    {
-      type: "movie",
-      id: "aisearch.recommend",
-      name: "AI Movie Recommendations",
-    },
-    {
-      type: "series",
-      id: "aisearch.recommend",
-      name: "AI Series Recommendations",
     },
     {
       type: "movie",
@@ -1968,6 +1971,620 @@ const seriesRecommendationPrompts = [
   "What are some mind-bending shows about time travel?",
   "Show me a great animated show for the whole family.",
 ];
+
+async function getTmdbDetailsByImdbId(imdbId, type, tmdbKey, language = "en-US") {
+  const cacheKey = `details_imdb_${imdbId}_${type}_${language}`;
+  if (tmdbDetailsCache.has(cacheKey)) {
+    return tmdbDetailsCache.get(cacheKey).data;
+  }
+
+  try {
+    const findUrl = `${TMDB_API_BASE}/find/${imdbId}?api_key=${tmdbKey}&language=${language}&external_source=imdb_id`;
+    const response = await fetch(findUrl);
+    if (!response.ok) {
+      throw new Error(`TMDB find API error: ${response.status}`);
+    }
+    const data = await response.json();
+    
+    const results = type === 'movie' ? data.movie_results : data.tv_results;
+    if (results && results.length > 0) {
+      const details = results[0];
+      tmdbDetailsCache.set(cacheKey, { timestamp: Date.now(), data: details });
+      return details;
+    }
+    return null;
+  } catch (error) {
+    logger.error("Error fetching TMDB details by IMDB ID", { imdbId, error: error.message });
+    return null;
+  }
+}
+
+const TMDB_GENRES = {
+  28: "Action",
+  12: "Adventure",
+  16: "Animation",
+  35: "Comedy",
+  80: "Crime",
+  99: "Documentary",
+  18: "Drama",
+  10751: "Family",
+  14: "Fantasy",
+  36: "History",
+  27: "Horror",
+  10402: "Music",
+  9648: "Mystery",
+  10749: "Romance",
+  878: "Science Fiction",
+  10770: "TV Movie",
+  53: "Thriller",
+  10752: "War",
+  37: "Western",
+};
+
+// TV specific genres
+const TMDB_TV_GENRES = {
+  10759: "Action & Adventure",
+  16: "Animation",
+  35: "Comedy",
+  80: "Crime",
+  99: "Documentary",
+  18: "Drama",
+  10751: "Family",
+  10762: "Kids",
+  9648: "Mystery",
+  10763: "News",
+  10764: "Reality",
+  10765: "Sci-Fi & Fantasy",
+  10766: "Soap",
+  10767: "Talk",
+  10768: "War & Politics",
+  37: "Western",
+};
+
+function clearTmdbCache() {
+  const size = tmdbCache.size;
+  tmdbCache.clear();
+  logger.info("TMDB cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearTmdbDetailsCache() {
+  const size = tmdbDetailsCache.size;
+  tmdbDetailsCache.clear();
+  logger.info("TMDB details cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearTmdbDiscoverCache() {
+  const size = tmdbDiscoverCache.size;
+  tmdbDiscoverCache.clear();
+  logger.info("TMDB discover cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+/**
+ * Removes a specific item from the TMDB discover cache
+ * @param {string} cacheKey - The cache key to remove
+ * @returns {Object} - Result of the operation
+ */
+function removeTmdbDiscoverCacheItem(cacheKey) {
+  if (!cacheKey) {
+    return {
+      success: false,
+      message: "No cache key provided",
+    };
+  }
+
+  if (!tmdbDiscoverCache.has(cacheKey)) {
+    return {
+      success: false,
+      message: "Cache key not found",
+      key: cacheKey,
+    };
+  }
+
+  tmdbDiscoverCache.delete(cacheKey);
+  logger.info("TMDB discover cache item removed", { cacheKey });
+
+  return {
+    success: true,
+    message: "Cache item removed successfully",
+    key: cacheKey,
+  };
+}
+
+/**
+ * Lists all keys in the TMDB discover cache
+ * @returns {Object} - Object containing all cache keys
+ */
+function listTmdbDiscoverCacheKeys() {
+  const keys = Array.from(tmdbDiscoverCache.cache.keys());
+  logger.info("TMDB discover cache keys listed", { count: keys.length });
+
+  return {
+    success: true,
+    count: keys.length,
+    keys: keys,
+  };
+}
+
+function clearAiCache() {
+  const size = aiRecommendationsCache.size;
+  aiRecommendationsCache.clear();
+  logger.info("AI recommendations cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function removeAiCacheByKeywords(keywords) {
+  try {
+    if (!keywords || typeof keywords !== "string") {
+      throw new Error("Invalid keywords parameter");
+    }
+
+    const searchPhrase = keywords.toLowerCase().trim();
+    const removedEntries = [];
+    let totalRemoved = 0;
+
+    // Get all cache keys
+    const cacheKeys = aiRecommendationsCache.keys();
+
+    // Iterate through all cache entries
+    for (const key of cacheKeys) {
+      // Extract the query part (everything before _movie_ or _series_)
+      const query = key.split("_")[0].toLowerCase();
+
+      // Only match if the search phrase is contained within the query
+      if (query.includes(searchPhrase)) {
+        const entry = aiRecommendationsCache.get(key);
+        if (entry) {
+          removedEntries.push({
+            key,
+            timestamp: new Date(entry.timestamp).toISOString(),
+            query: key.split("_")[0], // The query is the first part of the cache key
+          });
+          aiRecommendationsCache.delete(key);
+          totalRemoved++;
+        }
+      }
+    }
+
+    logger.info("AI recommendations cache entries removed by keywords", {
+      keywords: searchPhrase,
+      totalRemoved,
+      removedEntries,
+    });
+
+    return {
+      removed: totalRemoved,
+      entries: removedEntries,
+    };
+  } catch (error) {
+    logger.error("Error in removeAiCacheByKeywords:", {
+      error: error.message,
+      stack: error.stack,
+      keywords,
+    });
+    throw error;
+  }
+}
+
+function clearRpdbCache() {
+  const size = rpdbCache.size;
+  rpdbCache.clear();
+  logger.info("RPDB cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearTraktCache() {
+  const size = traktCache.size;
+  traktCache.clear();
+  logger.info("Trakt cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearTraktRawDataCache() {
+  const size = traktRawDataCache.size;
+  traktRawDataCache.clear();
+  logger.info("Trakt raw data cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearQueryAnalysisCache() {
+  const size = queryAnalysisCache.size;
+  queryAnalysisCache.clear();
+  logger.info("Query analysis cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function getCacheStats() {
+  return {
+    tmdbCache: {
+      size: tmdbCache.size,
+      maxSize: tmdbCache.max,
+      usagePercentage:
+        ((tmdbCache.size / tmdbCache.max) * 100).toFixed(2) + "%",
+    },
+    tmdbDetailsCache: {
+      size: tmdbDetailsCache.size,
+      maxSize: tmdbDetailsCache.max,
+      usagePercentage:
+        ((tmdbDetailsCache.size / tmdbDetailsCache.max) * 100).toFixed(2) + "%",
+    },
+    tmdbDiscoverCache: {
+      size: tmdbDiscoverCache.size,
+      maxSize: tmdbDiscoverCache.max,
+      usagePercentage:
+        ((tmdbDiscoverCache.size / tmdbDiscoverCache.max) * 100).toFixed(2) +
+        "%",
+    },
+    aiCache: {
+      size: aiRecommendationsCache.size,
+      maxSize: aiRecommendationsCache.max,
+      usagePercentage:
+        (
+          (aiRecommendationsCache.size / aiRecommendationsCache.max) *
+          100
+        ).toFixed(2) + "%",
+    },
+    rpdbCache: {
+      size: rpdbCache.size,
+      maxSize: rpdbCache.max,
+      usagePercentage:
+        ((rpdbCache.size / rpdbCache.max) * 100).toFixed(2) + "%",
+    },
+    traktCache: {
+      size: traktCache.size,
+      maxSize: traktCache.max,
+      usagePercentage:
+        ((traktCache.size / traktCache.max) * 100).toFixed(2) + "%",
+    },
+    traktRawDataCache: {
+      size: traktRawDataCache.size,
+      maxSize: traktRawDataCache.max,
+      usagePercentage:
+        ((traktRawDataCache.size / traktRawDataCache.max) * 100).toFixed(2) +
+        "%",
+    },
+    queryAnalysisCache: {
+      size: queryAnalysisCache.size,
+      maxSize: queryAnalysisCache.max,
+      usagePercentage:
+        ((queryAnalysisCache.size / queryAnalysisCache.max) * 100).toFixed(2) +
+        "%",
+    },
+    similarContentCache: {
+      size: similarContentCache.size,
+      maxSize: similarContentCache.max,
+      usagePercentage:
+        ((similarContentCache.size / similarContentCache.max) * 100).toFixed(2) + "%",
+    },
+  };
+}
+
+// Function to serialize all caches
+function serializeAllCaches() {
+  return {
+    tmdbCache: tmdbCache.serialize(),
+    tmdbDetailsCache: tmdbDetailsCache.serialize(),
+    tmdbDiscoverCache: tmdbDiscoverCache.serialize(),
+    aiRecommendationsCache: aiRecommendationsCache.serialize(),
+    rpdbCache: rpdbCache.serialize(),
+    traktCache: traktCache.serialize(),
+    traktRawDataCache: traktRawDataCache.serialize(),
+    queryAnalysisCache: queryAnalysisCache.serialize(),
+    similarContentCache: similarContentCache.serialize(),
+    stats: {
+      queryCounter: queryCounter,
+    },
+  };
+}
+
+// Function to load data into all caches
+function deserializeAllCaches(data) {
+  const results = {};
+
+  if (data.tmdbCache) {
+    results.tmdbCache = tmdbCache.deserialize(data.tmdbCache);
+  }
+
+  if (data.tmdbDetailsCache) {
+    results.tmdbDetailsCache = tmdbDetailsCache.deserialize(
+      data.tmdbDetailsCache
+    );
+  }
+
+  if (data.tmdbDiscoverCache) {
+    results.tmdbDiscoverCache = tmdbDiscoverCache.deserialize(
+      data.tmdbDiscoverCache
+    );
+  }
+
+  if (data.aiRecommendationsCache) {
+    results.aiRecommendationsCache = aiRecommendationsCache.deserialize(
+      data.aiRecommendationsCache
+    );
+  } else if (data.aiCache) {
+    results.aiRecommendationsCache = aiRecommendationsCache.deserialize(
+      data.aiCache
+    );
+  }
+
+  if (data.rpdbCache) {
+    results.rpdbCache = rpdbCache.deserialize(data.rpdbCache);
+  }
+
+  if (data.traktCache) {
+    results.traktCache = traktCache.deserialize(data.traktCache);
+  }
+
+  if (data.traktRawDataCache) {
+    results.traktRawDataCache = traktRawDataCache.deserialize(
+      data.traktRawDataCache
+    );
+  }
+
+  if (data.queryAnalysisCache) {
+    results.queryAnalysisCache = queryAnalysisCache.deserialize(
+      data.queryAnalysisCache
+    );
+  }
+
+  if (data.similarContentCache) {
+    results.similarContentCache = similarContentCache.deserialize(
+      data.similarContentCache
+    );
+  }
+
+  if (data.stats && typeof data.stats.queryCounter === "number") {
+    queryCounter = data.stats.queryCounter;
+    logger.info("Query counter restored from cache", {
+      totalQueries: queryCounter,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Makes an AI call to determine the content type and genres for a recommendation query
+ * @param {string} query - The user's search query
+ * @param {string} geminiKey - The Gemini API key
+ * @param {string} geminiModel - The Gemini model to use
+ * @returns {Promise<{type: string, genres: string[]}>} - The discovered type and genres
+ */
+async function discoverTypeAndGenres(query, geminiKey, geminiModel) {
+  const genAI = new GoogleGenerativeAI(geminiKey);
+  const model = genAI.getGenerativeModel({ model: geminiModel });
+
+  const promptText = `
+Analyze this recommendation query: "${query}"
+
+Determine:
+1. What type of content is being requested (movie, series, or ambiguous)
+2. What genres are relevant to this query (be specific and use standard genre names)
+
+Respond in a single line with pipe-separated format:
+type|genre1,genre2,genre3
+
+Where:
+- type is one of: movie, series, ambiguous
+- genres are comma-separated without spaces or all if no specific genres are discovered in the query
+
+Examples:
+movie|action,thriller,sci-fi
+series|comedy,drama
+ambiguous|romance,comedy
+movie|all
+series|all
+ambiguous|all
+
+Do not include any explanatory text before or after your response. Just the single line.
+`;
+
+  try {
+    logger.info("Making genre discovery API call", {
+      query,
+      model: geminiModel,
+    });
+
+    // Use withRetry for the Gemini API call
+    const text = await withRetry(
+      async () => {
+        try {
+          const aiResult = await model.generateContent(promptText);
+          const response = await aiResult.response;
+          const responseText = response.text().trim();
+
+          // Log successful response with more details
+          logger.info("Genre discovery API response", {
+            promptTokens: aiResult.promptFeedback?.tokenCount,
+            candidates: aiResult.candidates?.length,
+            safetyRatings: aiResult.candidates?.[0]?.safetyRatings,
+            responseTextLength: responseText.length,
+            responseTextSample: responseText,
+          });
+
+          return responseText;
+        } catch (error) {
+          // Enhance error with status for retry logic
+          logger.error("Genre discovery API call failed", {
+            error: error.message,
+            status: error.httpStatus || 500,
+            stack: error.stack,
+          });
+          error.status = error.httpStatus || 500;
+          throw error;
+        }
+      },
+      {
+        maxRetries: 3,
+        initialDelay: 2000,
+        maxDelay: 10000,
+        // Don't retry 400 errors (bad requests)
+        shouldRetry: (error) => !error.status || error.status !== 400,
+        operationName: "Genre discovery API call",
+      }
+    );
+
+    // Extract the first line in case there's multiple lines
+    const firstLine = text.split("\n")[0].trim();
+
+    // Try to parse the pipe-separated format
+    try {
+      // Split by pipe to get type and genres
+      const parts = firstLine.split("|");
+
+      if (parts.length !== 2) {
+        logger.error("Invalid format in genre discovery response", {
+          text: firstLine,
+          parts: parts.length,
+        });
+        return { type: "ambiguous", genres: [] };
+      }
+
+      // Get type and normalize it
+      let type = parts[0].trim().toLowerCase();
+      if (type !== "movie" && type !== "series") {
+        type = "ambiguous";
+      }
+
+      // Get genres
+      const genres = parts[1]
+        .split(",")
+        .map((g) => g.trim())
+        .filter((g) => g.length > 0 && g.toLowerCase() !== "ambiguous");
+
+      // If the only genre is "all", clear the genres array to use all genres
+      if (genres.length === 1 && genres[0].toLowerCase() === "all") {
+        logger.info(
+          "'All' genres specified, will use all genres for recommendations",
+          {
+            query,
+            type,
+          }
+        );
+        return {
+          type: type,
+          genres: [],
+        };
+      }
+
+      logger.info("Successfully parsed genre discovery response", {
+        type: type,
+        genresCount: genres.length,
+        genres: genres,
+      });
+
+      return {
+        type: type,
+        genres: genres,
+      };
+    } catch (error) {
+      logger.error("Failed to parse genre discovery response", {
+        error: error.message,
+        text: firstLine,
+        fullResponse: text,
+      });
+      return { type: "ambiguous", genres: [] };
+    }
+  } catch (error) {
+    logger.error("Genre discovery API error", {
+      error: error.message,
+      stack: error.stack,
+    });
+    return { type: "ambiguous", genres: [] };
+  }
+}
+
+/**
+ * Filters Trakt data based on specified genres
+ * @param {Object} traktData - The complete Trakt data
+ * @param {string[]} genres - The genres to filter by
+ * @returns {Object} - The filtered Trakt data
+ */
+function filterTraktDataByGenres(traktData, genres) {
+  if (!traktData || !genres || genres.length === 0) {
+    return {
+      recentlyWatched: [],
+      highlyRated: [],
+      lowRated: [],
+    };
+  }
+
+  const { watched, rated } = traktData;
+  const genreSet = new Set(genres.map((g) => g.toLowerCase()));
+
+  // Helper function to check if an item has any of the specified genres
+  const hasMatchingGenre = (item) => {
+    const media = item.movie || item.show;
+    if (!media || !media.genres || media.genres.length === 0) return false;
+
+    return media.genres.some((g) => genreSet.has(g.toLowerCase()));
+  };
+
+  // Filter watched items by genre
+  const recentlyWatched = (watched || []).filter(hasMatchingGenre).slice(0, 25); // Last 25 watched in these genres
+
+  // Filter highly rated items (4-5 stars)
+  const highlyRated = (rated || [])
+    .filter((item) => item.rating >= 4)
+    .filter(hasMatchingGenre)
+    .slice(0, 25); // Top 25 highly rated
+
+  // Filter low rated items (1-2 stars)
+  const lowRated = (rated || [])
+    .filter((item) => item.rating <= 2)
+    .filter(hasMatchingGenre)
+    .slice(0, 15); // Top 15 low rated
+
+  return {
+    recentlyWatched,
+    highlyRated,
+    lowRated,
+  };
+}
+
+// Function to increment and get the query counter
+function incrementQueryCounter() {
+  queryCounter++;
+  logger.info("Query counter incremented", { totalQueries: queryCounter });
+  return queryCounter;
+}
+
+// Function to get the current query count
+function getQueryCount() {
+  return queryCounter;
+}
+
+// Function to set the query counter to a specific value
+function setQueryCount(newCount) {
+  if (typeof newCount !== "number" || newCount < 0) {
+    throw new Error("Query count must be a non-negative number");
+  }
+  const oldCount = queryCounter;
+  queryCounter = newCount;
+  logger.info("Query counter manually set", {
+    oldCount,
+    newCount: queryCounter,
+  });
+  return queryCounter;
+}
+
+function getRpdbTierFromApiKey(apiKey) {
+  if (!apiKey) return -1;
+  try {
+    const tierMatch = apiKey.match(/^t(\d+)-/);
+    if (tierMatch && tierMatch[1] !== undefined) {
+      return parseInt(tierMatch[1]);
+    }
+    return -1;
+  } catch (error) {
+    logger.error("Error parsing RPDB tier from API key", {
+      error: error.message,
+    });
+    return -1;
+  }
+}
 
 const catalogHandler = async function (args, req) {
   const startTime = Date.now();
@@ -3082,658 +3699,160 @@ const catalogHandler = async function (args, req) {
   }
 };
 
-builder.defineCatalogHandler(catalogHandler);
+const streamHandler = async (args, req) => {
+  logger.info("Stream request received, creating AI Recommendations link.", { id: args.id, type: args.type });
+  const isWeb = req.headers["origin"]?.includes("web.stremio.com");
+  const stremioUrlPrefix = isWeb ? "https://web.stremio.com/#" : "stremio://";
 
-builder.defineMetaHandler(async function (args) {
+  const stream = {
+    name: "✨ AI Search",
+    description: "Similar movies and shows.",
+    externalUrl: `${stremioUrlPrefix}/detail/${args.type}/ai-recs:${args.id}`,
+    behaviorHints: {
+      notWebReady: true,
+    },
+  };
+
+  return Promise.resolve({ streams: [stream] });
+};
+
+const metaHandler = async function (args) {
   const { type, id, config } = args;
+  const startTime = Date.now();
+  const stremioUrlPrefix = "stremio://";
 
   try {
-    const decryptedConfigStr = decryptConfig(config);
-    if (!decryptedConfigStr) {
-      throw new Error("Failed to decrypt config data");
+    if (!id || !id.startsWith('ai-recs:')) {
+      return { meta: null };
     }
-
-    const configData = JSON.parse(decryptedConfigStr);
-
-    const tmdbKey = configData.TmdbApiKey;
-    const rpdbKey = configData.RpdbApiKey || DEFAULT_RPDB_KEY;
-    const rpdbPosterType = configData.RpdbPosterType || "poster-default";
-    const language = configData.TmdbLanguage || "en-US";
-    const usingUserKey = !!configData.RpdbApiKey;
-    const usingDefaultKey = !configData.RpdbApiKey && !!DEFAULT_RPDB_KEY;
-    const userTier = usingUserKey
-      ? getRpdbTierFromApiKey(configData.RpdbApiKey)
-      : -1;
-    const isTier0User = (usingUserKey && userTier === 0) || usingDefaultKey;
-
-    if (!tmdbKey) {
-      throw new Error("Missing TMDB API key in config");
-    }
-
-    const tmdbData = await searchTMDB(id, type, null, tmdbKey, language);
-    if (tmdbData) {
-      let poster = tmdbData.poster;
-      if (rpdbKey && tmdbData.imdb_id) {
-        const rpdbPoster = await fetchRpdbPoster(
-          tmdbData.imdb_id,
-          rpdbKey,
-          rpdbPosterType,
-          isTier0User
-        );
-        if (rpdbPoster) {
-          poster = rpdbPoster;
-        }
+    if (config) {
+      const decryptedConfigStr = decryptConfig(config);
+      if (!decryptedConfigStr) {
+        throw new Error("Failed to decrypt config data in metaHandler");
       }
+      const configData = JSON.parse(decryptedConfigStr);
+      const { GeminiApiKey, TmdbApiKey, GeminiModel, NumResults, RpdbApiKey, RpdbPosterType, TmdbLanguage } = configData;
+
+      const originalId = id.split(':')[1];
+      let sourceDetails = await getTmdbDetailsByImdbId(originalId, type, TmdbApiKey);
+      
+      if (!sourceDetails) {
+        const fallbackType = type === 'movie' ? 'series' : 'movie';
+        sourceDetails = await getTmdbDetailsByImdbId(originalId, fallbackType, TmdbApiKey);
+      }
+
+      if (!sourceDetails) {
+        throw new Error(`Could not find source details for original ID: ${originalId}`);
+      }
+
+      const sourceTitle = sourceDetails.title || sourceDetails.name;
+      const sourceYear = (sourceDetails.release_date || sourceDetails.first_air_date || "").substring(0, 4);
+      let numResults = parseInt(NumResults) || 15;
+      if (numResults > 25) numResults = 25;
+
+      const promptText = `
+      You are an expert recommendation engine for movies and TV shows.
+      Your task is to generate a list of exactly ${numResults} recommendations that are highly similar to "${sourceTitle} (${sourceYear})".
+
+      Your final list must be constructed in two parts:
+
+      **PART 1: FRANCHISE ENTRIES**
+      First, list all other official movies/series from the same franchise as "${sourceTitle}". This is your highest priority.
+      *   This part of the list **MUST be sorted chronologically by release year**.
+
+      **PART 2: SIMILAR RECOMMENDATIONS**
+      After the franchise entries (if any), fill the remaining slots to reach ${numResults} total recommendations with unrelated titles that are highly similar in mood, theme, and genre.
+      *   This part of the list **MUST be sorted by relevance to "${sourceTitle}", with the most similar item first**.
+
+      **CRITICAL RULES:**
+      1.  **Exclusion:** You **MUST NOT** include the original item, "${sourceTitle} (${sourceYear})", in your list.
+      2.  **Final Output:** Provide **ONLY** the combined list of recommendations. Do not include any headers (like "PART 1"), introductory text, or explanations.
+
+      **Format:**
+      Your response must be a list of pipe-separated values, with each entry on a new line:
+      type|name|year
+
+      **Example (if the source was 'The Dark Knight' and numResults was 5):**
+      movie|Batman Begins|2005
+      movie|The Dark Knight Rises|2012
+      movie|The Town|2010
+      movie|Zodiac|2007
+      movie|Prisoners|2013
+      `;
+
+      const genAI = new GoogleGenerativeAI(GeminiApiKey);
+      const model = genAI.getGenerativeModel({ model: GeminiModel || DEFAULT_GEMINI_MODEL });
+      const aiResult = await model.generateContent(promptText);
+      const responseText = aiResult.response.text().trim();
+      const lines = responseText.split('\n').map(line => line.trim()).filter(Boolean);
+
+      const videoPromises = lines.map(async (line) => {
+        const parts = line.split('|');
+        if (parts.length !== 3) return null;
+        const [recType, name, year] = parts.map(p => p.trim());
+        const tmdbData = await searchTMDB(name, recType, year, TmdbApiKey);
+        if (tmdbData && tmdbData.imdb_id) {
+          
+          let description = tmdbData.overview || "";
+
+          if (tmdbData.tmdbRating && tmdbData.tmdbRating > 0) {
+            const ratingText = `⭐ TMDB Rating: ${tmdbData.tmdbRating.toFixed(1)}/10`;
+            description = `${ratingText}\n\n${description}`;
+          }
+
+          return {
+            id: tmdbData.imdb_id,
+            title: tmdbData.title,
+            released: new Date(tmdbData.release_date || '1970-01-01').toISOString(),
+            overview: description,
+            thumbnail: tmdbData.poster,
+            streams: [
+              {
+                title: "View Details",
+                externalUrl: `${stremioUrlPrefix}/detail/${recType}/${tmdbData.imdb_id}`
+              }
+            ]
+          };
+        }
+        return null;
+      });
+
+      const videos = (await Promise.all(videoPromises)).filter(Boolean);
 
       const meta = {
-        id: tmdbData.imdb_id,
-        type: type,
-        name: tmdbData.title || tmdbData.name,
-        description: tmdbData.overview,
-        year: parseInt(tmdbData.release_date || tmdbData.first_air_date) || 0,
-        poster: poster,
-        background: tmdbData.backdrop,
-        posterShape: "regular",
+        id: id,
+        type: 'series',
+        name: `AI: Recommendations for ${sourceTitle}`,
+        description: `A collection of titles similar to ${sourceTitle} (${sourceYear}), generated by AI.`,
+        poster: sourceDetails.poster_path ? `https://image.tmdb.org/t/p/w500${sourceDetails.poster_path}` : null,
+        background: sourceDetails.backdrop_path ? `https://image.tmdb.org/t/p/original${sourceDetails.backdrop_path}` : null,
+        videos: videos,
       };
 
-      if (tmdbData.genres && tmdbData.genres.length > 0) {
-        meta.genres = tmdbData.genres
-          .map((id) =>
-            type === "series" ? TMDB_TV_GENRES[id] : TMDB_GENRES[id]
-          )
-          .filter(Boolean);
-      }
-
+      logger.info(`Successfully generated ${videos.length} recommendations.`, { source: sourceTitle, duration: Date.now() - startTime });
       return { meta };
     }
   } catch (error) {
-    logger.error("Meta Error:", error);
+    logger.error("Meta Handler Error:", { message: error.message, stack: error.stack, id: id });
   }
 
   return { meta: null };
-});
-
-const TMDB_GENRES = {
-  28: "Action",
-  12: "Adventure",
-  16: "Animation",
-  35: "Comedy",
-  80: "Crime",
-  99: "Documentary",
-  18: "Drama",
-  10751: "Family",
-  14: "Fantasy",
-  36: "History",
-  27: "Horror",
-  10402: "Music",
-  9648: "Mystery",
-  10749: "Romance",
-  878: "Science Fiction",
-  10770: "TV Movie",
-  53: "Thriller",
-  10752: "War",
-  37: "Western",
 };
 
-// TV specific genres
-const TMDB_TV_GENRES = {
-  10759: "Action & Adventure",
-  16: "Animation",
-  35: "Comedy",
-  80: "Crime",
-  99: "Documentary",
-  18: "Drama",
-  10751: "Family",
-  10762: "Kids",
-  9648: "Mystery",
-  10763: "News",
-  10764: "Reality",
-  10765: "Sci-Fi & Fantasy",
-  10766: "Soap",
-  10767: "Talk",
-  10768: "War & Politics",
-  37: "Western",
-};
+builder.defineCatalogHandler(catalogHandler);
+
+builder.defineStreamHandler(streamHandler);
+
+builder.defineMetaHandler(metaHandler);
 
 const addonInterface = builder.getInterface();
 
-function clearTmdbCache() {
-  const size = tmdbCache.size;
-  tmdbCache.clear();
-  logger.info("TMDB cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function clearTmdbDetailsCache() {
-  const size = tmdbDetailsCache.size;
-  tmdbDetailsCache.clear();
-  logger.info("TMDB details cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function clearTmdbDiscoverCache() {
-  const size = tmdbDiscoverCache.size;
-  tmdbDiscoverCache.clear();
-  logger.info("TMDB discover cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-/**
- * Removes a specific item from the TMDB discover cache
- * @param {string} cacheKey - The cache key to remove
- * @returns {Object} - Result of the operation
- */
-function removeTmdbDiscoverCacheItem(cacheKey) {
-  if (!cacheKey) {
-    return {
-      success: false,
-      message: "No cache key provided",
-    };
-  }
-
-  if (!tmdbDiscoverCache.has(cacheKey)) {
-    return {
-      success: false,
-      message: "Cache key not found",
-      key: cacheKey,
-    };
-  }
-
-  tmdbDiscoverCache.delete(cacheKey);
-  logger.info("TMDB discover cache item removed", { cacheKey });
-
-  return {
-    success: true,
-    message: "Cache item removed successfully",
-    key: cacheKey,
-  };
-}
-
-/**
- * Lists all keys in the TMDB discover cache
- * @returns {Object} - Object containing all cache keys
- */
-function listTmdbDiscoverCacheKeys() {
-  const keys = Array.from(tmdbDiscoverCache.cache.keys());
-  logger.info("TMDB discover cache keys listed", { count: keys.length });
-
-  return {
-    success: true,
-    count: keys.length,
-    keys: keys,
-  };
-}
-
-function clearAiCache() {
-  const size = aiRecommendationsCache.size;
-  aiRecommendationsCache.clear();
-  logger.info("AI recommendations cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function removeAiCacheByKeywords(keywords) {
-  try {
-    if (!keywords || typeof keywords !== "string") {
-      throw new Error("Invalid keywords parameter");
-    }
-
-    const searchPhrase = keywords.toLowerCase().trim();
-    const removedEntries = [];
-    let totalRemoved = 0;
-
-    // Get all cache keys
-    const cacheKeys = aiRecommendationsCache.keys();
-
-    // Iterate through all cache entries
-    for (const key of cacheKeys) {
-      // Extract the query part (everything before _movie_ or _series_)
-      const query = key.split("_")[0].toLowerCase();
-
-      // Only match if the search phrase is contained within the query
-      if (query.includes(searchPhrase)) {
-        const entry = aiRecommendationsCache.get(key);
-        if (entry) {
-          removedEntries.push({
-            key,
-            timestamp: new Date(entry.timestamp).toISOString(),
-            query: key.split("_")[0], // The query is the first part of the cache key
-          });
-          aiRecommendationsCache.delete(key);
-          totalRemoved++;
-        }
-      }
-    }
-
-    logger.info("AI recommendations cache entries removed by keywords", {
-      keywords: searchPhrase,
-      totalRemoved,
-      removedEntries,
-    });
-
-    return {
-      removed: totalRemoved,
-      entries: removedEntries,
-    };
-  } catch (error) {
-    logger.error("Error in removeAiCacheByKeywords:", {
-      error: error.message,
-      stack: error.stack,
-      keywords,
-    });
-    throw error;
-  }
-}
-
-function clearRpdbCache() {
-  const size = rpdbCache.size;
-  rpdbCache.clear();
-  logger.info("RPDB cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function clearTraktCache() {
-  const size = traktCache.size;
-  traktCache.clear();
-  logger.info("Trakt cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function clearTraktRawDataCache() {
-  const size = traktRawDataCache.size;
-  traktRawDataCache.clear();
-  logger.info("Trakt raw data cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function clearQueryAnalysisCache() {
-  const size = queryAnalysisCache.size;
-  queryAnalysisCache.clear();
-  logger.info("Query analysis cache cleared", { previousSize: size });
-  return { cleared: true, previousSize: size };
-}
-
-function getCacheStats() {
-  return {
-    tmdbCache: {
-      size: tmdbCache.size,
-      maxSize: tmdbCache.max,
-      usagePercentage:
-        ((tmdbCache.size / tmdbCache.max) * 100).toFixed(2) + "%",
-    },
-    tmdbDetailsCache: {
-      size: tmdbDetailsCache.size,
-      maxSize: tmdbDetailsCache.max,
-      usagePercentage:
-        ((tmdbDetailsCache.size / tmdbDetailsCache.max) * 100).toFixed(2) + "%",
-    },
-    tmdbDiscoverCache: {
-      size: tmdbDiscoverCache.size,
-      maxSize: tmdbDiscoverCache.max,
-      usagePercentage:
-        ((tmdbDiscoverCache.size / tmdbDiscoverCache.max) * 100).toFixed(2) +
-        "%",
-    },
-    aiCache: {
-      size: aiRecommendationsCache.size,
-      maxSize: aiRecommendationsCache.max,
-      usagePercentage:
-        (
-          (aiRecommendationsCache.size / aiRecommendationsCache.max) *
-          100
-        ).toFixed(2) + "%",
-    },
-    rpdbCache: {
-      size: rpdbCache.size,
-      maxSize: rpdbCache.max,
-      usagePercentage:
-        ((rpdbCache.size / rpdbCache.max) * 100).toFixed(2) + "%",
-    },
-    traktCache: {
-      size: traktCache.size,
-      maxSize: traktCache.max,
-      usagePercentage:
-        ((traktCache.size / traktCache.max) * 100).toFixed(2) + "%",
-    },
-    traktRawDataCache: {
-      size: traktRawDataCache.size,
-      maxSize: traktRawDataCache.max,
-      usagePercentage:
-        ((traktRawDataCache.size / traktRawDataCache.max) * 100).toFixed(2) +
-        "%",
-    },
-    queryAnalysisCache: {
-      size: queryAnalysisCache.size,
-      maxSize: queryAnalysisCache.max,
-      usagePercentage:
-        ((queryAnalysisCache.size / queryAnalysisCache.max) * 100).toFixed(2) +
-        "%",
-    },
-  };
-}
-
-// Function to serialize all caches
-function serializeAllCaches() {
-  return {
-    tmdbCache: tmdbCache.serialize(),
-    tmdbDetailsCache: tmdbDetailsCache.serialize(),
-    tmdbDiscoverCache: tmdbDiscoverCache.serialize(),
-    aiRecommendationsCache: aiRecommendationsCache.serialize(),
-    rpdbCache: rpdbCache.serialize(),
-    traktCache: traktCache.serialize(),
-    traktRawDataCache: traktRawDataCache.serialize(),
-    queryAnalysisCache: queryAnalysisCache.serialize(),
-    stats: {
-      queryCounter: queryCounter,
-    },
-  };
-}
-
-// Function to load data into all caches
-function deserializeAllCaches(data) {
-  const results = {};
-
-  if (data.tmdbCache) {
-    results.tmdbCache = tmdbCache.deserialize(data.tmdbCache);
-  }
-
-  if (data.tmdbDetailsCache) {
-    results.tmdbDetailsCache = tmdbDetailsCache.deserialize(
-      data.tmdbDetailsCache
-    );
-  }
-
-  if (data.tmdbDiscoverCache) {
-    results.tmdbDiscoverCache = tmdbDiscoverCache.deserialize(
-      data.tmdbDiscoverCache
-    );
-  }
-
-  // Handle both aiCache and aiRecommendationsCache for backward compatibility
-  if (data.aiRecommendationsCache) {
-    results.aiRecommendationsCache = aiRecommendationsCache.deserialize(
-      data.aiRecommendationsCache
-    );
-  } else if (data.aiCache) {
-    results.aiRecommendationsCache = aiRecommendationsCache.deserialize(
-      data.aiCache
-    );
-  }
-
-  if (data.rpdbCache) {
-    results.rpdbCache = rpdbCache.deserialize(data.rpdbCache);
-  }
-
-  if (data.traktCache) {
-    results.traktCache = traktCache.deserialize(data.traktCache);
-  }
-
-  if (data.traktRawDataCache) {
-    results.traktRawDataCache = traktRawDataCache.deserialize(
-      data.traktRawDataCache
-    );
-  }
-
-  if (data.queryAnalysisCache) {
-    results.queryAnalysisCache = queryAnalysisCache.deserialize(
-      data.queryAnalysisCache
-    );
-  }
-
-  // Restore the query counter if available
-  if (data.stats && typeof data.stats.queryCounter === "number") {
-    queryCounter = data.stats.queryCounter;
-    logger.info("Query counter restored from cache", {
-      totalQueries: queryCounter,
-    });
-  }
-
-  return results;
-}
-
-/**
- * Makes an AI call to determine the content type and genres for a recommendation query
- * @param {string} query - The user's search query
- * @param {string} geminiKey - The Gemini API key
- * @param {string} geminiModel - The Gemini model to use
- * @returns {Promise<{type: string, genres: string[]}>} - The discovered type and genres
- */
-async function discoverTypeAndGenres(query, geminiKey, geminiModel) {
-  const genAI = new GoogleGenerativeAI(geminiKey);
-  const model = genAI.getGenerativeModel({ model: geminiModel });
-
-  const promptText = `
-Analyze this recommendation query: "${query}"
-
-Determine:
-1. What type of content is being requested (movie, series, or ambiguous)
-2. What genres are relevant to this query (be specific and use standard genre names)
-
-Respond in a single line with pipe-separated format:
-type|genre1,genre2,genre3
-
-Where:
-- type is one of: movie, series, ambiguous
-- genres are comma-separated without spaces or all if no specific genres are discovered in the query
-
-Examples:
-movie|action,thriller,sci-fi
-series|comedy,drama
-ambiguous|romance,comedy
-movie|all
-series|all
-ambiguous|all
-
-Do not include any explanatory text before or after your response. Just the single line.
-`;
-
-  try {
-    logger.info("Making genre discovery API call", {
-      query,
-      model: geminiModel,
-    });
-
-    // Use withRetry for the Gemini API call
-    const text = await withRetry(
-      async () => {
-        try {
-          const aiResult = await model.generateContent(promptText);
-          const response = await aiResult.response;
-          const responseText = response.text().trim();
-
-          // Log successful response with more details
-          logger.info("Genre discovery API response", {
-            promptTokens: aiResult.promptFeedback?.tokenCount,
-            candidates: aiResult.candidates?.length,
-            safetyRatings: aiResult.candidates?.[0]?.safetyRatings,
-            responseTextLength: responseText.length,
-            responseTextSample: responseText,
-          });
-
-          return responseText;
-        } catch (error) {
-          // Enhance error with status for retry logic
-          logger.error("Genre discovery API call failed", {
-            error: error.message,
-            status: error.httpStatus || 500,
-            stack: error.stack,
-          });
-          error.status = error.httpStatus || 500;
-          throw error;
-        }
-      },
-      {
-        maxRetries: 3,
-        initialDelay: 2000,
-        maxDelay: 10000,
-        // Don't retry 400 errors (bad requests)
-        shouldRetry: (error) => !error.status || error.status !== 400,
-        operationName: "Genre discovery API call",
-      }
-    );
-
-    // Extract the first line in case there's multiple lines
-    const firstLine = text.split("\n")[0].trim();
-
-    // Try to parse the pipe-separated format
-    try {
-      // Split by pipe to get type and genres
-      const parts = firstLine.split("|");
-
-      if (parts.length !== 2) {
-        logger.error("Invalid format in genre discovery response", {
-          text: firstLine,
-          parts: parts.length,
-        });
-        return { type: "ambiguous", genres: [] };
-      }
-
-      // Get type and normalize it
-      let type = parts[0].trim().toLowerCase();
-      if (type !== "movie" && type !== "series") {
-        type = "ambiguous";
-      }
-
-      // Get genres
-      const genres = parts[1]
-        .split(",")
-        .map((g) => g.trim())
-        .filter((g) => g.length > 0 && g.toLowerCase() !== "ambiguous");
-
-      // If the only genre is "all", clear the genres array to use all genres
-      if (genres.length === 1 && genres[0].toLowerCase() === "all") {
-        logger.info(
-          "'All' genres specified, will use all genres for recommendations",
-          {
-            query,
-            type,
-          }
-        );
-        return {
-          type: type,
-          genres: [],
-        };
-      }
-
-      logger.info("Successfully parsed genre discovery response", {
-        type: type,
-        genresCount: genres.length,
-        genres: genres,
-      });
-
-      return {
-        type: type,
-        genres: genres,
-      };
-    } catch (error) {
-      logger.error("Failed to parse genre discovery response", {
-        error: error.message,
-        text: firstLine,
-        fullResponse: text,
-      });
-      return { type: "ambiguous", genres: [] };
-    }
-  } catch (error) {
-    logger.error("Genre discovery API error", {
-      error: error.message,
-      stack: error.stack,
-    });
-    return { type: "ambiguous", genres: [] };
-  }
-}
-
-/**
- * Filters Trakt data based on specified genres
- * @param {Object} traktData - The complete Trakt data
- * @param {string[]} genres - The genres to filter by
- * @returns {Object} - The filtered Trakt data
- */
-function filterTraktDataByGenres(traktData, genres) {
-  if (!traktData || !genres || genres.length === 0) {
-    return {
-      recentlyWatched: [],
-      highlyRated: [],
-      lowRated: [],
-    };
-  }
-
-  const { watched, rated } = traktData;
-  const genreSet = new Set(genres.map((g) => g.toLowerCase()));
-
-  // Helper function to check if an item has any of the specified genres
-  const hasMatchingGenre = (item) => {
-    const media = item.movie || item.show;
-    if (!media || !media.genres || media.genres.length === 0) return false;
-
-    return media.genres.some((g) => genreSet.has(g.toLowerCase()));
-  };
-
-  // Filter watched items by genre
-  const recentlyWatched = (watched || []).filter(hasMatchingGenre).slice(0, 25); // Last 25 watched in these genres
-
-  // Filter highly rated items (4-5 stars)
-  const highlyRated = (rated || [])
-    .filter((item) => item.rating >= 4)
-    .filter(hasMatchingGenre)
-    .slice(0, 25); // Top 25 highly rated
-
-  // Filter low rated items (1-2 stars)
-  const lowRated = (rated || [])
-    .filter((item) => item.rating <= 2)
-    .filter(hasMatchingGenre)
-    .slice(0, 15); // Top 15 low rated
-
-  return {
-    recentlyWatched,
-    highlyRated,
-    lowRated,
-  };
-}
-
-// Function to increment and get the query counter
-function incrementQueryCounter() {
-  queryCounter++;
-  logger.info("Query counter incremented", { totalQueries: queryCounter });
-  return queryCounter;
-}
-
-// Function to get the current query count
-function getQueryCount() {
-  return queryCounter;
-}
-
-// Function to set the query counter to a specific value
-function setQueryCount(newCount) {
-  if (typeof newCount !== "number" || newCount < 0) {
-    throw new Error("Query count must be a non-negative number");
-  }
-  const oldCount = queryCounter;
-  queryCounter = newCount;
-  logger.info("Query counter manually set", {
-    oldCount,
-    newCount: queryCounter,
-  });
-  return queryCounter;
-}
-
-function getRpdbTierFromApiKey(apiKey) {
-  if (!apiKey) return -1;
-  try {
-    const tierMatch = apiKey.match(/^t(\d+)-/);
-    if (tierMatch && tierMatch[1] !== undefined) {
-      return parseInt(tierMatch[1]);
-    }
-    return -1;
-  } catch (error) {
-    logger.error("Error parsing RPDB tier from API key", {
-      error: error.message,
-    });
-    return -1;
-  }
-}
 module.exports = {
   builder,
   addonInterface,
   catalogHandler,
+  streamHandler,
+  metaHandler,
   clearTmdbCache,
   clearTmdbDetailsCache,
   clearTmdbDiscoverCache,
