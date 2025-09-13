@@ -624,6 +624,87 @@ async function startServer() {
         }
       );
 
+      addonRouter.get(
+        routePath + ":config/meta/:type/:id.json",
+        async (req, res) => {
+          try {
+            if (ENABLE_LOGGING) {
+              logger.info("--- META ROUTE MATCHED ---", {
+                path: req.path,
+                params: req.params,
+              });
+            }
+
+            const args = {
+              type: req.params.type,
+              id: req.params.id,
+              config: req.params.config,
+            };
+
+            const { metaHandler } = require("./addon");
+            const response = await metaHandler(args);
+
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("Content-Type", "application/json");
+            res.json(response);
+
+            if (ENABLE_LOGGING) {
+              logger.info("[Meta Route] Successfully sent response from metaHandler.", { metaName: response?.meta?.name });
+            }
+          } catch (error) {
+            logger.error("[Meta Route] A CRITICAL error occurred in the meta route handler:", {
+              message: error.message,
+              stack: error.stack,
+            });
+            if (!res.headersSent) {
+              res.status(500).json({ meta: null, error: "Internal server error" });
+            }
+          }
+        }
+      );
+
+      addonRouter.get(
+        routePath + ":config/stream/:type/:id.json",
+        async (req, res, next) => {
+          logger.info("--- STREAM ROUTE MATCHED ---");
+          logger.info(`[Stream Route] Path: ${req.path}`);
+          logger.info(`[Stream Route] Params: type=${req.params.type}, id=${req.params.id}, config=${req.params.config}`);
+
+          try {
+
+            const args = {
+              type: req.params.type,
+              id: req.params.id,
+              config: req.params.config,
+            };
+
+            if (ENABLE_LOGGING) {
+              logger.info("[Stream Route] Manually calling the stream handler from addon.js");
+            }
+
+            const { streamHandler } = require("./addon");
+            const response = await streamHandler(args, req);
+
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("Content-Type", "application/json");
+            res.json(response);
+
+            if (ENABLE_LOGGING) {
+              logger.info("[Stream Route] Successfully received response from streamHandler and sent to client.", { streamCount: response?.streams?.length || 0 });
+            }
+
+          } catch (error) {
+            logger.error("[Stream Route] A CRITICAL error occurred in the route handler itself:", {
+              message: error.message,
+              stack: error.stack,
+            });
+            if (!res.headersSent) {
+                res.status(500).json({ streams: [], error: "Internal server error" });
+            }
+          }
+        }
+      );
+
       addonRouter.get(routePath + "ping", routeHandlers.ping);
       addonRouter.get(routePath + "configure", (req, res) => {
         const configurePath = path.join(__dirname, "public", "configure.html");
