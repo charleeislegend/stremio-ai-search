@@ -2646,6 +2646,7 @@ const catalogHandler = async function (args, req) {
     const configData = args.config;
 
     if (!configData || Object.keys(configData).length === 0) {
+      logger.error('Configuration Missing', { reason: 'The addon has not been configured yet. Please set your API keys.' });
       const errorMeta = createErrorMeta('Configuration Missing', 'The addon has not been configured yet. Please set your API keys.');
       return { metas: [errorMeta] };
     }
@@ -2654,20 +2655,24 @@ const catalogHandler = async function (args, req) {
     const tmdbKey = configData.TmdbApiKey;
 
     if (configData.traktConnectionError) {
+      logger.error('Trakt Connection Failed', { reason: 'User access to Trakt.tv has expired or was revoked.' });
       const errorMeta = createErrorMeta('Trakt Connection Failed', 'Your access to Trakt.tv has expired or was revoked. Please log in again via the addon configuration page.');
       return { metas: [errorMeta] };
     }
     if (!tmdbKey || tmdbKey.length < 10) {
+      logger.error('TMDB API Key Invalid', { reason: 'Your TMDB API key is missing or invalid.' });
       const errorMeta = createErrorMeta('TMDB API Key Invalid', 'Your TMDB API key is missing or invalid. Please correct it in the addon settings.');
       return { metas: [errorMeta] };
     }
     const tmdbValidationUrl = `https://api.themoviedb.org/3/configuration?api_key=${tmdbKey}`;
     const tmdbResponse = await fetch(tmdbValidationUrl);
     if (!tmdbResponse.ok) {
+      logger.error('TMDB API Key Validation Failed', { reason: `The key failed validation (Status: ${tmdbResponse.status}).`, keyUsed: tmdbKey.substring(0, 4) + '...' });
       const errorMeta = createErrorMeta('TMDB API Key Invalid', `The key failed validation (Status: ${tmdbResponse.status}). Please check your TMDB key in the addon settings.`);
       return { metas: [errorMeta] };
     }
     if (!geminiKey || geminiKey.length < 10) {
+      logger.error('Gemini API Key Invalid', { reason: 'Your Gemini API key is missing or invalid.' });
       const errorMeta = createErrorMeta('Gemini API Key Invalid', 'Your Gemini API key is missing or invalid. Please correct it in the addon settings.');
       return { metas: [errorMeta] };
     }
@@ -2814,7 +2819,7 @@ const catalogHandler = async function (args, req) {
     // If the intent is specific (not ambiguous) and doesn't match the requested type,
     // return empty results regardless of whether it's a recommendation or search
     if (intent !== "ambiguous" && intent !== type) {
-      logger.debug("Intent mismatch - returning empty results", {
+      logger.error("Intent mismatch - returning empty results", {
         intent,
         type,
         searchQuery,
@@ -3034,6 +3039,17 @@ const catalogHandler = async function (args, req) {
           type,
         });
 
+        if (selectedRecommendations.length === 0) {
+          logger.error("AI returned no valid recommendations", { 
+            query: searchQuery, 
+            type: type,
+            model: geminiModel,
+            responseText: text
+          });
+          const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+          return { metas: [errorMeta] };
+        }
+
         const metaPromises = selectedRecommendations.map((item) =>
           toStremioMeta(
             item,
@@ -3048,6 +3064,16 @@ const catalogHandler = async function (args, req) {
         );
 
         const metas = (await Promise.all(metaPromises)).filter(Boolean);
+
+        if (metas.length === 0 && !exactMatchMeta) {
+          logger.error("All AI recommendations failed TMDB lookup", {
+            query: searchQuery,
+            type: type,
+            recommendationCount: selectedRecommendations.length
+          });
+          const errorMeta = createErrorMeta('Data Fetch Error', 'Could not retrieve details for any of the AI recommendations. This may be a temporary TMDB issue.');
+          return { metas: [errorMeta] };
+        }
 
         logger.debug("Catalog handler response from cache", {
           metasCount: metas.length,
