@@ -30,6 +30,7 @@ const {
   isValidEncryptedFormat,
 } = require("./utils/crypto");
 const zlib = require("zlib");
+const { initDb, storeTokens, getTokens } = require("./database");
 
 // Admin token for cache management
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "change-me-in-env-file";
@@ -253,6 +254,41 @@ async function loadCachesFromFiles() {
   }
 }
 
+async function refreshTraktToken(username, refreshToken) {
+  logger.info(`Attempting to refresh Trakt token for user: ${username}`);
+  try {
+    const response = await fetch("https://api.trakt.tv/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        refresh_token: refreshToken,
+        client_id: process.env.TRAKT_CLIENT_ID,
+        client_secret: process.env.TRAKT_CLIENT_SECRET,
+        redirect_uri: `${HOST}/aisearch/oauth/callback`,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Failed to refresh token: ${response.status} - ${errorBody}`);
+    }
+
+    const tokenData = await response.json();
+    await storeTokens(username, tokenData.access_token, tokenData.refresh_token, tokenData.expires_in);
+    logger.info(`Successfully refreshed and stored new Trakt token for user: ${username}`);
+
+    return {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in,
+    };
+  } catch (error) {
+    logger.error(`Error refreshing Trakt token for ${username}:`, { error: error.message });
+    return null;
+  }
+}
+
 const ENABLE_LOGGING = process.env.ENABLE_LOGGING === "true" || false;
 
 if (ENABLE_LOGGING) {
@@ -312,6 +348,7 @@ const getConfiguredManifest = (geminiKey, tmdbKey) => ({
 
 async function startServer() {
   try {
+    await initDb();
     // Load caches from files on startup
     await loadCachesFromFiles();
 
@@ -520,7 +557,7 @@ async function startServer() {
 
       addonRouter.get(
         routePath + ":config/catalog/:type/:id/:extra?.json",
-        (req, res, next) => {
+        async (req, res, next) => {
           try {
             if (ENABLE_LOGGING) {
               logger.debug("Received catalog request", {
@@ -531,93 +568,87 @@ async function startServer() {
               });
             }
 
-            const configParam = req.params.config;
+            const encryptedConfig = req.params.config;
 
-            if (configParam && !isValidEncryptedFormat(configParam)) {
+            if (encryptedConfig && !isValidEncryptedFormat(encryptedConfig)) {
               if (ENABLE_LOGGING) {
                 logger.error("Invalid encrypted config format", {
-                  configLength: configParam.length,
-                  configSample: configParam.substring(0, 20) + "...",
+                  configLength: encryptedConfig.length,
+                  configSample: encryptedConfig.substring(0, 20) + "...",
                 });
               }
-              return res.json({
-                metas: [],
-                error: "Invalid configuration format",
-              });
+              return res.json({ metas: [], error: "Invalid configuration format" });
             }
 
-            req.stremioConfig = configParam;
+            // DECRYPT CONFIG and HANDLE TOKENS
+            let decryptedConfig = {};
+            if (encryptedConfig) {
+              const decryptedStr = decryptConfig(encryptedConfig);
+              decryptedConfig = JSON.parse(decryptedStr);
+
+              // If user is configured with Trakt, get and refresh tokens if needed
+              if (decryptedConfig.traktUsername) {
+                let tokenData = await getTokens(decryptedConfig.traktUsername);
+                if (tokenData) {
+                  // Check if token is expired (with a 5-minute buffer)
+                  if (tokenData.expires_at < Date.now() - 5 * 60 * 1000) {
+                    const newTokens = await refreshTraktToken(decryptedConfig.traktUsername, tokenData.refresh_token);
+                    if (newTokens) {
+                      decryptedConfig.TraktAccessToken = newTokens.access_token;
+                    } else {
+                      // Refresh failed, proceed without a token
+                      delete decryptedConfig.TraktAccessToken;
+                      decryptedConfig.traktConnectionError = true;
+                      logger.warn(`Proceeding without Trakt data for ${decryptedConfig.traktUsername} due to refresh failure.`);
+                    }
+                  } else {
+                    decryptedConfig.TraktAccessToken = tokenData.access_token;
+                  }
+                }
+              }
+            }
 
             res.setHeader("Access-Control-Allow-Origin", "*");
             res.setHeader("Content-Type", "application/json");
 
-            const { getRouter } = require("stremio-addon-sdk");
-            const sdkRouter = getRouter(addonInterface);
+            const searchParam = req.params.extra?.split("search=")[1];
+            const searchQuery = searchParam ? decodeURIComponent(searchParam) : req.query.search || "";
 
-            sdkRouter(req, res, (err) => {
-              if (err) {
+            const args = {
+              type: req.params.type,
+              id: req.params.id,
+              extra: { ...req.params.extra, search: searchQuery },
+              config: decryptedConfig,
+            };
+
+            catalogHandler(args, req)
+              .then((response) => {
+                const transformedMetas = (response.metas || []).map((meta) => ({
+                  ...meta,
+                  releaseInfo: meta.year?.toString() || "",
+                  genres: (meta.genres || []).map((g) => g.toLowerCase()),
+                  trailers: [],
+                }));
+
                 if (ENABLE_LOGGING) {
-                  logger.error("SDK router error:", { error: err });
+                  logger.debug("Catalog handler response", { metasCount: transformedMetas.length });
                 }
-                return res.json({ metas: [] });
-              }
 
-              const searchParam = req.params.extra?.split("search=")[1];
-              const searchQuery = searchParam
-                ? decodeURIComponent(searchParam)
-                : req.query.search || "";
-
-              if (ENABLE_LOGGING) {
-                logger.debug("Processing search query", { searchQuery });
-              }
-
-              const args = {
-                type: req.params.type,
-                id: req.params.id,
-                extra: req.params.extra,
-                config: configParam,
-                search: searchQuery,
-              };
-
-              catalogHandler(args, req)
-                .then((response) => {
-                  const transformedMetas = (response.metas || []).map(
-                    (meta) => ({
-                      ...meta,
-                      releaseInfo: meta.year?.toString() || "",
-                      genres: (meta.genres || []).map((g) => g.toLowerCase()),
-                      trailers: [],
-                    })
-                  );
-
-                  if (ENABLE_LOGGING) {
-                    logger.debug("Catalog handler response", {
-                      metasCount: transformedMetas.length,
-                    });
-                  }
-
-                  res.json({
-                    metas: transformedMetas,
-                    cacheAge: response.cacheAge || 3600,
-                    staleAge: response.staleAge || 7200,
-                  });
-                })
-                .catch((error) => {
-                  if (ENABLE_LOGGING) {
-                    logger.error("Catalog handler error:", {
-                      error: error.message,
-                      stack: error.stack,
-                    });
-                  }
-                  res.json({ metas: [] });
+                res.json({
+                  metas: transformedMetas,
+                  cacheAge: response.cacheAge || 3600,
+                  staleAge: response.staleAge || 7200,
                 });
-            });
+              })
+              .catch((error) => {
+                if (ENABLE_LOGGING) {
+                  logger.error("Catalog handler error:", { error: error.message, stack: error.stack });
+                }
+                res.json({ metas: [] });
+              });
           } catch (error) {
             if (ENABLE_LOGGING) {
-              logger.error("Catalog route error:", {
-                error: error.message,
-                stack: error.stack,
-              });
+              logger.error("Catalog route error:", { error: error.message, stack: error.stack });
             }
             res.json({ metas: [] });
           }
@@ -1280,11 +1311,23 @@ async function startServer() {
     app.use("/", addonRouter);
     app.use(BASE_PATH, addonRouter);
 
-    app.post(["/encrypt", "/aisearch/encrypt"], express.json(), (req, res) => {
+    app.post(["/encrypt", "/aisearch/encrypt"], express.json(), async (req, res) => {
       try {
-        const configData = req.body;
+        const { configData, traktAuthData } = req.body;
         if (!configData) {
           return res.status(400).json({ error: "Missing config data" });
+        }
+
+        // If Trakt data is present, store it in the database
+        if (traktAuthData && traktAuthData.username) {
+          await storeTokens(
+            traktAuthData.username,
+            traktAuthData.accessToken,
+            traktAuthData.refreshToken,
+            traktAuthData.expiresIn
+          );
+          // Add the username to the config that will be encrypted
+          configData.traktUsername = traktAuthData.username;
         }
 
         if (!configData.RpdbApiKey) {
@@ -1377,6 +1420,7 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       TmdbApiKey,
       GeminiModel,
       TraktAccessToken,
+      traktUsername,
     } = req.body;
     
     const validationResults = {
@@ -1386,7 +1430,7 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       errors: {},
     };
     
-    const modelToUse = GeminiModel || "gemini-2.5-flash-lite";
+    const modelToUse = GeminiModel || "gemini-1.5-flash-latest";
 
     if (ENABLE_LOGGING) {
       logger.debug("Validation request received", {
@@ -1394,6 +1438,7 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
         hasGeminiKey: !!GeminiApiKey,
         hasTmdbKey: !!TmdbApiKey,
         hasTraktToken: !!TraktAccessToken,
+        hasTraktUsername: !!traktUsername,
       });
     }
 
@@ -1440,8 +1485,23 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
         validationResults.errors.tmdb = "TMDB API Key is required.";
     }
 
-    // Trakt Validation (only if token is provided)
-    if (TraktAccessToken) {
+    // --- NEW TRAKT VALIDATION LOGIC ---
+    let tokenToCheck = TraktAccessToken;
+
+    // If a username is provided, this is a health check. Get the token from the DB.
+    if (traktUsername) {
+      const tokenData = await getTokens(traktUsername);
+      if (tokenData && tokenData.access_token) {
+        tokenToCheck = tokenData.access_token;
+      } else {
+        tokenToCheck = null; // No token found in DB
+        validationResults.trakt = false;
+        validationResults.errors.trakt = "No stored Trakt credentials found for this user.";
+      }
+    }
+
+    // Now, validate the token we found (either from the request body or the DB)
+    if (tokenToCheck) {
       validations.push((async () => {
         try {
           const traktResponse = await fetch(`${TRAKT_API_BASE}/users/me`, {
@@ -1449,18 +1509,26 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
               "Content-Type": "application/json",
               "trakt-api-version": "2",
               "trakt-api-key": TRAKT_CLIENT_ID,
-              Authorization: `Bearer ${TraktAccessToken}`,
+              Authorization: `Bearer ${tokenToCheck}`,
             },
           });
           if (!traktResponse.ok) {
             validationResults.trakt = false;
-            validationResults.errors.trakt = "Invalid or expired Trakt.tv access token";
+            validationResults.errors.trakt = "Trakt.tv connection is invalid. Please re-login.";
+          } else {
+            validationResults.trakt = true; // Explicitly confirm it's valid
           }
         } catch (error) {
           validationResults.trakt = false;
-          validationResults.errors.trakt = "Trakt.tv API validation failed";
+          validationResults.errors.trakt = "Trakt.tv API validation failed.";
         }
       })());
+    } else if (TraktAccessToken || traktUsername) {
+      // If we expected a token but didn't have one to check, it's a failure.
+      validationResults.trakt = false;
+      if (!validationResults.errors.trakt) {
+        validationResults.errors.trakt = "Missing Trakt access token for validation.";
+      }
     }
     
     // Wait for all validations to complete

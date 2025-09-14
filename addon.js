@@ -460,6 +460,57 @@ async function processPreferencesInParallel(watched, rated, history) {
   };
 }
 
+/**
+ * Creates a Stremio meta object with a dynamically generated SVG poster for displaying errors.
+ * @param {string} title - The title of the error message.
+ * @param {string} message - The main body of the error message.
+ * @returns {object} A Stremio meta object.
+ */
+function createErrorMeta(title, message) {
+  // Simple text wrapping for the message
+  const words = message.split(' ');
+  let lines = [];
+  let currentLine = words[0] || '';
+  for (let i = 1; i < words.length; i++) {
+    let testLine = currentLine + ' ' + words[i];
+    if (testLine.length > 35) { // Approx characters per line
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = testLine;
+    }
+  }
+  lines.push(currentLine);
+
+  // Generate tspan elements for each line
+  const messageTspans = lines.map((line, index) => `<tspan x="250" y="${560 + index * 30}">${line}</tspan>`).join('');
+
+  const svg = `
+    <svg width="500" height="750" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="#2d2d2d" />
+      <path d="M250 50 L450 400 L50 400 Z" fill="#c0392b"/>
+      <path d="M250 120 L400 380 L100 380 Z" fill="#e74c3c"/>
+      <text fill="white" font-size="60" font-family="Arial, sans-serif" x="250" y="270" text-anchor="middle" font-weight="bold">!</text>
+      <text fill="white" font-size="32" font-family="Arial, sans-serif" x="250" y="500" text-anchor="middle" font-weight="bold">${title}</text>
+      <text fill="white" font-size="24" font-family="Arial, sans-serif" text-anchor="middle">
+        ${messageTspans}
+      </text>
+      <text fill="#bdc3c7" font-size="20" font-family="Arial, sans-serif" x="250" y="700" text-anchor="middle">Please check the addon configuration.</text>
+    </svg>
+  `;
+
+  const posterDataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+
+  return {
+    id: `error:${title.replace(/\s+/g, '_')}`,
+    type: 'movie',
+    name: title,
+    description: message,
+    poster: posterDataUri,
+    posterShape: 'regular',
+  };
+}
+
 // Function to fetch incremental Trakt data
 async function fetchTraktIncrementalData(
   clientId,
@@ -2591,17 +2642,44 @@ const catalogHandler = async function (args, req) {
   const { id, type, extra } = args;
   let isHomepageQuery = false;
 
-  let searchQuery = "";
-  if (typeof extra === "string" && extra.includes("search=")) {
-    searchQuery = decodeURIComponent(extra.split("search=")[1]);
-  } else if (extra?.search) {
-    searchQuery = extra.search;
-  }
-
   try {
-    const encryptedConfig = req.stremioConfig;
+    const configData = args.config;
 
-    if (!encryptedConfig) {
+    if (!configData || Object.keys(configData).length === 0) {
+      const errorMeta = createErrorMeta('Configuration Missing', 'The addon has not been configured yet. Please set your API keys.');
+      return { metas: [errorMeta] };
+    }
+
+    const geminiKey = configData.GeminiApiKey;
+    const tmdbKey = configData.TmdbApiKey;
+
+    if (configData.traktConnectionError) {
+      const errorMeta = createErrorMeta('Trakt Connection Failed', 'Your access to Trakt.tv has expired or was revoked. Please log in again via the addon configuration page.');
+      return { metas: [errorMeta] };
+    }
+    if (!tmdbKey || tmdbKey.length < 10) {
+      const errorMeta = createErrorMeta('TMDB API Key Invalid', 'Your TMDB API key is missing or invalid. Please correct it in the addon settings.');
+      return { metas: [errorMeta] };
+    }
+    const tmdbValidationUrl = `https://api.themoviedb.org/3/configuration?api_key=${tmdbKey}`;
+    const tmdbResponse = await fetch(tmdbValidationUrl);
+    if (!tmdbResponse.ok) {
+      const errorMeta = createErrorMeta('TMDB API Key Invalid', `The key failed validation (Status: ${tmdbResponse.status}). Please check your TMDB key in the addon settings.`);
+      return { metas: [errorMeta] };
+    }
+    if (!geminiKey || geminiKey.length < 10) {
+      const errorMeta = createErrorMeta('Gemini API Key Invalid', 'Your Gemini API key is missing or invalid. Please correct it in the addon settings.');
+      return { metas: [errorMeta] };
+    }
+
+    let searchQuery = "";
+    if (typeof extra === "string" && extra.includes("search=")) {
+      searchQuery = decodeURIComponent(extra.split("search=")[1]);
+    } else if (extra?.search) {
+      searchQuery = extra.search;
+    }
+
+    if (!configData || Object.keys(configData).length === 0) {
       logger.error("Missing configuration - Please configure the addon first");
       logger.emptyCatalog("Missing configuration", { type, extra });
       return {
@@ -2609,18 +2687,6 @@ const catalogHandler = async function (args, req) {
         error: "Please configure the addon with valid API keys first",
       };
     }
-
-    const decryptedConfigStr = decryptConfig(encryptedConfig);
-    if (!decryptedConfigStr) {
-      logger.error("Invalid configuration - Please reconfigure the addon");
-      logger.emptyCatalog("Invalid configuration", { type, extra });
-      return {
-        metas: [],
-        error: "Invalid configuration detected. Please reconfigure the addon.",
-      };
-    }
-
-    const configData = JSON.parse(decryptedConfigStr);
 
     if (!searchQuery) {
       if (id === "aisearch.recommend") {
@@ -2669,8 +2735,6 @@ const catalogHandler = async function (args, req) {
       traktAccessTokenLength: configData.TraktAccessToken?.length || 0,
     });
 
-    const geminiKey = configData.GeminiApiKey;
-    const tmdbKey = configData.TmdbApiKey;
     const geminiModel = configData.GeminiModel || DEFAULT_GEMINI_MODEL;
     const language = configData.TmdbLanguage || "en-US";
 
@@ -3670,32 +3734,22 @@ const catalogHandler = async function (args, req) {
 
       return { metas: finalMetas };
     } catch (error) {
-      logger.error("Gemini API Error:", {
-        error: error.message,
-        stack: error.stack,
-        params: {
-          query: searchQuery,
-          type,
-          geminiKeyLength: geminiKey?.length,
-        },
-      });
-      logger.emptyCatalog("Gemini API Error", {
-        type,
-        searchQuery,
-        error: error.message,
-      });
-      return { metas: [] };
+      logger.error("Gemini API Error:", { error: error.message, stack: error.stack, query: searchQuery });
+      let errorMessage = 'The AI model failed to respond. This may be a temporary issue.';
+      if (error.message.includes('400') || error.message.includes('API key not valid')) {
+        errorMessage = 'Your Gemini API key is invalid or has been revoked. Please update it in the settings.';
+      } else if (error.message.includes('quota')) {
+        errorMessage = 'You have exceeded your Gemini API quota for the day. Please check your Google AI Studio account.';
+      } else if (error.message.includes('404')) {
+          errorMessage = 'The selected Gemini Model is invalid or not found. Please try a different model in the settings.';
+      }
+      const errorMeta = createErrorMeta('AI Error', errorMessage);
+      return { metas: [errorMeta] };
     }
   } catch (error) {
-    logger.error("Catalog processing error", {
-      error: error.message,
-      stack: error.stack,
-    });
-    logger.emptyCatalog("Catalog processing error", {
-      type,
-      error: error.message,
-    });
-    return { metas: [] };
+    logger.error("Catalog processing error", { error: error.message, stack: error.stack });
+    const errorMeta = createErrorMeta('Addon Error', 'A critical error occurred. Please check the server logs for more details.');
+    return { metas: [errorMeta] };
   }
 };
 

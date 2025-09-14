@@ -696,6 +696,8 @@
               placeholder="Will be automatically filled after authentication"
             />
             <input type="hidden" id="traktRefreshToken" />
+            <input type="hidden" id="traktUsername" />
+            <input type="hidden" id="traktExpiresIn" />
             <div class="help-text">
               Connect your Trakt.tv account to get personalized movie
               recommendations based on your watch history and ratings.
@@ -1084,113 +1086,101 @@
       document.addEventListener("DOMContentLoaded", function () {
         // Setup key handling
         setupKeyHandling();
-
-        window.getAddonUrl = async function () {
-          const geminiKey = document.getElementById("geminiKey").value.trim();
-          const tmdbKey = document.getElementById("tmdbKey").value.trim();
-          const rpdbKey = document.getElementById("rpdbKey").value.trim();
-          const rpdbPosterType = document.getElementById("rpdbPosterType").value;
-          const tmdbLanguage = document.getElementById("tmdbLanguage").value;
-          const numResults = document.getElementById("numResults").value.trim();
-          const traktAccessToken = document.getElementById("traktAccessToken").value.trim();
-          const existingConfigId = document.getElementById("existingConfigId").value;
-          const enableRpdb = document.getElementById("enableRpdbPosters").checked;
-          const enableHomepage = document.getElementById("enableHomepage").checked;
-          const homepageQuery = document.getElementById("homepageQuery").value.trim();
-          const includeAdult = document.getElementById("includeAdult").checked;
-
-          // Basic validation
-          if (!geminiKey || geminiKey.length < 10) {
-            showError("Please enter a valid Gemini API key");
-            return null;
-          }
-
-          if (!tmdbKey || tmdbKey.length < 10) {
-            showError("Please enter a valid TMDB API key");
-            return null;
-          }
-
-          try {
-            setLoading(true);
-            // Validate API keys
-            const isValid = await validateApiKeys(geminiKey, tmdbKey);
-            if (!isValid) {
-              return null;
-            }
-
-            clearError();
-
-            // Create config object
-            const config = {
-              GeminiApiKey: geminiKey,
-              TmdbApiKey: tmdbKey,
-              RpdbApiKey: rpdbKey,
-              NumResults: numResults ? parseInt(numResults) : 20,
-              EnableAiCache: document.getElementById("enableAiCache").checked,
-              TmdbLanguage: tmdbLanguage,
-              GeminiModel: document.getElementById("geminiModel").value,
-              EnableRpdb: enableRpdb,
-              EnableHomepage: enableHomepage,
-              IncludeAdult: includeAdult,
-            };
-
-            // Only add homepage query if homepage is enabled and query is not empty
-            if (enableHomepage && homepageQuery) {
-              config.HomepageQuery = homepageQuery;
-            }
-
-            // Only add RPDB poster type if RPDB is enabled
-            if (enableRpdb) {
-              config.RpdbPosterType = rpdbPosterType;
-            }
-
-            // Add Trakt configuration if provided
-            if (traktAccessToken) {
-              config.TraktAccessToken = traktAccessToken;
-              const traktRefreshToken = document
-                .getElementById("traktRefreshToken")
-                .value.trim();
-              if (traktRefreshToken) {
-                config.TraktRefreshToken = traktRefreshToken;
-              }
-            }
-
-            // Use the encrypt endpoint to get the encrypted configuration
-            const response = await fetch(`/aisearch/encrypt`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(config),
-            });
-
-            if (!response.ok) {
-              throw new Error(
-                `Failed to encrypt configuration: ${response.status} ${response.statusText}`
-              );
-            }
-
-            const data = await response.json();
-            if (!data.encryptedConfig) {
-              throw new Error(
-                "No encrypted configuration received from server"
-              );
-            }
-
-            const configId = data.encryptedConfig;
-
-            return {
-              stremio: `stremio://${window.location.host}/aisearch/${configId}/manifest.json`,
-              https: `https://${window.location.host}/aisearch/${configId}/manifest.json`,
-            };
-          } catch (error) {
-            showError("Error: " + error.message);
-            return null;
-          } finally {
-            setLoading(false);
-          }
-        };
       });
+
+      window.getAddonUrl = async function () {
+        const geminiKey = document.getElementById("geminiKey").value.trim();
+        const tmdbKey = document.getElementById("tmdbKey").value.trim();
+        
+        // Basic validation
+        if (!geminiKey || geminiKey.length < 10) {
+          showError("Please enter a valid Gemini API key");
+          return null;
+        }
+        if (!tmdbKey || tmdbKey.length < 10) {
+          showError("Please enter a valid TMDB API key");
+          return null;
+        }
+
+        try {
+          setLoading(true);
+          const isValid = await validateApiKeys(geminiKey, tmdbKey);
+          if (!isValid) return null;
+          clearError();
+
+          // --- Main Logic Change Starts Here ---
+
+          // 1. Prepare the main configuration object
+          const configData = {
+            GeminiApiKey: geminiKey,
+            TmdbApiKey: tmdbKey,
+            RpdbApiKey: document.getElementById("rpdbKey").value.trim(),
+            NumResults: parseInt(document.getElementById("numResults").value.trim()) || 20,
+            EnableAiCache: document.getElementById("enableAiCache").checked,
+            TmdbLanguage: document.getElementById("tmdbLanguage").value,
+            GeminiModel: document.getElementById("geminiModel").value,
+            EnableRpdb: document.getElementById("enableRpdbPosters").checked,
+            EnableHomepage: document.getElementById("enableHomepage").checked,
+            IncludeAdult: document.getElementById("includeAdult").checked,
+          };
+
+          // Add conditional properties
+          if (configData.EnableHomepage && document.getElementById("homepageQuery").value.trim()) {
+            configData.HomepageQuery = document.getElementById("homepageQuery").value.trim();
+          }
+          if (configData.EnableRpdb) {
+            configData.RpdbPosterType = document.getElementById("rpdbPosterType").value;
+          }
+
+          // If editing, we pass the existing username to let the server know who this config belongs to
+          const existingUsername = document.getElementById("traktUsername").value.trim();
+          if (existingUsername) {
+              configData.traktUsername = existingUsername;
+          }
+          
+          // 2. Prepare the Trakt authentication data object (only if a new login just occurred)
+          let traktAuthData = null;
+          const newAccessToken = document.getElementById("traktAccessToken").value.trim();
+          if (newAccessToken && configData.traktUsername) { // Check username to ensure a successful auth flow
+              traktAuthData = {
+                  username: configData.traktUsername,
+                  accessToken: newAccessToken,
+                  refreshToken: document.getElementById("traktRefreshToken").value.trim(),
+                  expiresIn: parseInt(document.getElementById("traktExpiresIn").value.trim()) || 3600,
+              };
+          }
+
+          // 3. Create the final payload in the new format
+          const payload = {
+            configData: configData,
+            traktAuthData: traktAuthData, // This will be null if no new Trakt login happened
+          };
+
+          // 4. Send the new payload to the server
+          const response = await fetch(`/aisearch/encrypt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          // --- Main Logic Change Ends Here ---
+
+          if (!response.ok) throw new Error(`Failed to encrypt configuration: ${response.status}`);
+          const data = await response.json();
+          if (!data.encryptedConfig) throw new Error("No encrypted configuration received");
+
+          const configId = data.encryptedConfig;
+          return {
+            stremio: `stremio://${window.location.host}/aisearch/${configId}/manifest.json`,
+            https: `https://${window.location.host}/aisearch/${configId}/manifest.json`,
+          };
+        } catch (error) {
+          showError("Error: " + error.message);
+          return null;
+        } finally {
+          setLoading(false);
+        }
+      };
 
       async function validateApiKeys(geminiKey, tmdbKey) {
         const errorDiv = document.getElementById("error");
@@ -1279,7 +1269,6 @@
           manualUrlDiv.textContent = `Copy this URL manually:\n${urls.https}`;
         }
       }
-
       // Show/hide RPDB poster type dropdown based on API key presence
       // REMOVED this listener as visibility is now controlled by the checkbox
       /*
@@ -1448,15 +1437,22 @@
               setTimeout(toggleRpdbFields, 100);
 
               // RESTORED: Load Trakt configuration if available and validate token
-              if (config.TraktAccessToken) {
-                document.getElementById("traktAccessToken").value =
-                  config.TraktAccessToken;
-                if (config.TraktRefreshToken) {
-                  document.getElementById("traktRefreshToken").value =
-                    config.TraktRefreshToken;
-                }
+              if (config.traktUsername) {
+                // NEW CONFIG: User is already migrated.
+                console.log("Loading new config with traktUsername:", config.traktUsername);
+                document.getElementById("traktUsername").value = config.traktUsername;
+                // The validateAndRefreshTraktToken call later will handle the UI update.
 
-                setTimeout(validateAndRefreshTraktToken, 100);
+              } else if (config.TraktAccessToken) {
+                // OLD CONFIG: User needs to migrate.
+                console.log("Detected old configuration with an access token.");
+                // We don't save the old token, as we want them to re-auth.
+                // Instead, we update the UI to inform them of the required action.
+                updateTraktStatus(
+                  "Re-Login with Trakt.tv to Update",
+                  "#e67e22", // An orange/warning color
+                  "<strong>Action Required:</strong> We've updated our Trakt integration for better reliability. Please click the button above to log in again and update your configuration."
+                );
               }
 
               // Show advanced options if any are set (including the new checkbox)
@@ -1496,120 +1492,73 @@
         }
       });
 
-      window.addEventListener("message", async function (event) {
+window.addEventListener("message", async function (event) {
         if (event.origin !== window.location.origin) return;
 
         if (event.data.type === "TRAKT_AUTH_SUCCESS") {
           const { access_token, refresh_token, expires_in } = event.data;
-          document.getElementById("traktAccessToken").value = access_token;
-          document.getElementById("traktRefreshToken").value = refresh_token;
+          
+          updateTraktStatus("Fetching user...", "#666", "Getting your Trakt.tv profile...");
 
-          updateTraktStatus(
-            "Connected to Trakt.tv",
-            "#2a5a2a",
-            "Successfully connected to Trakt.tv! <strong>Click 'Update Configuration in Stremio' below to save your settings.</strong>"
-          );
+          try {
+            // New Step: Fetch the Trakt username
+            const userResponse = await fetch("https://api.trakt.tv/users/me", {
+              headers: {
+                "Content-Type": "application/json",
+                "trakt-api-version": "2",
+                "trakt-api-key": TRAKT_CLIENT_ID,
+                "Authorization": `Bearer ${access_token}`,
+              },
+            });
+
+            if (!userResponse.ok) {
+              throw new Error("Failed to fetch Trakt user profile.");
+            }
+
+            const userData = await userResponse.json();
+            const username = userData.username;
+
+            // Store all auth data in hidden fields
+            document.getElementById("traktAccessToken").value = access_token;
+            document.getElementById("traktRefreshToken").value = refresh_token;
+            document.getElementById("traktExpiresIn").value = expires_in;
+            document.getElementById("traktUsername").value = username;
+
+            updateTraktStatus(
+              `Connected as ${username}`,
+              "#2a5a2a", // Green color for success
+              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon' below to save.`
+            );
+          } catch (error) {
+            console.error("Trakt user fetch error:", error);
+            updateTraktStatus(
+              "Authentication Error",
+              "#e74c3c", // Red color for error
+              "Could not verify your Trakt.tv account. Please try authenticating again."
+            );
+          }
         }
       });
 
       async function validateAndRefreshTraktToken() {
-        const traktAccessToken =
-          document.getElementById("traktAccessToken").value;
-        const traktRefreshToken =
-          document.getElementById("traktRefreshToken").value;
-        const traktAuthBtn = document.getElementById("traktAuthBtn");
-        const traktHelpText = document.querySelector(
-          ".form-group:has(#traktAuthBtn) .help-text"
-        );
+        const existingUsername = document.getElementById("traktUsername").value.trim();
 
+        // This function now only runs in edit mode if a username is already set.
+        if (existingUsername) {
+            updateTraktStatus(
+                `Connected as ${existingUsername}`,
+                "#2a5a2a", // Green color
+                `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`
+            );
+            return;
+        }
+
+        const traktAccessToken = document.getElementById("traktAccessToken").value;
         if (!traktAccessToken) {
           updateTraktStatus(
             "Login with Trakt.tv",
-            "#007bff",
-            "Connect your Trakt.tv account to get personalized movie recommendations based on your watch history and ratings.<br /><small>Note: You'll need to re-authenticate every 90 days for security reasons.</small>"
-          );
-          return;
-        }
-
-        updateTraktStatus(
-          "Validating token...",
-          "#666",
-          "Checking your Trakt.tv connection status..."
-        );
-
-        try {
-          const validateResponse = await fetch(`/aisearch/validate`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              TraktAccessToken: traktAccessToken,
-            }),
-          });
-
-          if (!validateResponse.ok) {
-            throw new Error(
-              `Validation endpoint failed with status: ${validateResponse.status}`
-            );
-          }
-
-          const validationResult = await validateResponse.json();
-
-          if (validationResult.trakt) {
-            updateTraktStatus(
-              "Connected to Trakt.tv",
-              "#2a5a2a",
-              "Successfully connected to Trakt.tv! <strong>Click 'Update Configuration in Stremio' below to save your settings.</strong>"
-            );
-            return;
-          }
-
-          if (!validationResult.trakt && traktRefreshToken) {
-            updateTraktStatus(
-              "Token expired, refreshing...",
-              "#e67e22",
-              "Your token has expired. Attempting to refresh automatically..."
-            );
-
-            const refreshResponse = await fetch("/aisearch/oauth/refresh", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ refresh_token: traktRefreshToken }),
-            });
-
-            if (refreshResponse.ok) {
-              const newTokens = await refreshResponse.json();
-              document.getElementById("traktAccessToken").value =
-                newTokens.access_token;
-              if (newTokens.refresh_token) {
-                document.getElementById("traktRefreshToken").value =
-                  newTokens.refresh_token;
-              }
-              document.getElementById("configureBtn").textContent = "Save Refreshed Token";
-              document.getElementById("copyBtn").textContent = "Copy URL with Refreshed Token";
-              
-              updateTraktStatus(
-                "Token Refreshed - PLEASE SAVE",
-                "#e67e22",
-                "Your Trakt.tv session was successfully refreshed. <strong>You MUST click 'Save Refreshed Token' below to save these changes.</strong>"
-              );
-              return;
-            }
-          }
-
-          updateTraktStatus(
-            "Authentication Required",
-            "#e74c3c",
-            "Your Trakt.tv session has expired. Please click 'Login with Trakt.tv' to reconnect your account."
-          );
-          document.getElementById("traktAccessToken").value = "";
-          document.getElementById("traktRefreshToken").value = "";
-        } catch (error) {
-          updateTraktStatus(
-            "Connection Error",
-            "#e74c3c",
-            "Unable to validate Trakt.tv connection. Please check your internet connection or try re-authenticating."
+            "#2a2a2a",
+            "Connect your Trakt.tv account to get personalized movie recommendations based on your watch history and ratings."
           );
         }
       }
