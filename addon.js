@@ -2888,11 +2888,13 @@ const catalogHandler = async function (args, req) {
 
       // Log if we couldn't discover any genres for a recommendation query
       if (discoveredGenres.length === 0) {
-        logger.emptyCatalog("No genres discovered for recommendation query", {
-          type,
-          searchQuery,
-          isRecommendation: true,
-        });
+        if (ENABLE_LOGGING) {
+          logger.emptyCatalog("No genres discovered for recommendation query", {
+            type,
+            searchQuery,
+            isRecommendation: true,
+          });
+        }
       }
 
       logger.info("Genre discovery results", {
@@ -2940,13 +2942,15 @@ const catalogHandler = async function (args, req) {
               filteredTraktData.highlyRated.length === 0 &&
               filteredTraktData.lowRated.length === 0
             ) {
-              logger.emptyCatalog("No Trakt data matches discovered genres", {
-                type,
-                searchQuery,
-                discoveredGenres,
-                totalWatched: traktData.watched.length,
-                totalRated: traktData.rated.length,
-              });
+              if (ENABLE_LOGGING) {
+                logger.emptyCatalog("No Trakt data matches discovered genres", {
+                  type,
+                  searchQuery,
+                  discoveredGenres,
+                  totalWatched: traktData.watched.length,
+                  totalRated: traktData.rated.length,
+                });
+              }
             }
           } else {
             // When no genres are discovered, use all Trakt data
