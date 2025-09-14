@@ -2869,8 +2869,7 @@ const catalogHandler = async function (args, req) {
           isRecommendationQuery(searchQuery) ? "recommendation" : "search"
         } appears to be for ${intent}, not ${type}`,
       });
-      const errorMeta = createErrorMeta('Wrong Category', `Your query is for a ${intent}. Please perform this search in the "${intent.charAt(0).toUpperCase() + intent.slice(1)} Search" category.`);
-      return { metas: [errorMeta] };
+      return { metas: [] };
     }
 
     let exactMatchMeta = null;
