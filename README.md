@@ -15,6 +15,10 @@ An intelligent search addon for Stremio powered by Google's Gemini AI. Get perso
 - You can set the number of recommendations AI should return for a query (30 Max)
 - TMDB integration ensures you have a content rich catalog for movies and series
 - RPDB integration gives you access to awesome posters with inbuilt ratings
+- Optional Movie and Series recommendation poster in homescreen
+- Optional Adult content recommendation
+- AI based Similar items recommendation in streams view
+- Error Posters in case of errors for better user experience
 
 ## Installation
 
@@ -444,6 +448,9 @@ GET https://stremio.itcon.au/aisearch/cache/clear/ai?adminToken=your-admin-token
 
 # Remove specific AI cache entries by keywords
 GET https://stremio.itcon.au/aisearch/cache/clear/ai/keywords?adminToken=your-admin-token&keywords=ocean%20thriller
+
+# Purge all empty AI recommendation entries from the cache
+GET https://stremio.itcon.au/aisearch/cache/purge/ai-empty?adminToken=your-admin-token
 ```
 
 #### TMDB Cache Management
@@ -494,6 +501,7 @@ You can use these endpoints directly in your browser by visiting:
 ```
 https://stremio.itcon.au/aisearch/cache/clear/ai?adminToken=your-admin-token
 https://stremio.itcon.au/aisearch/cache/clear/ai/keywords?adminToken=your-admin-token&keywords=your search terms
+https://stremio.itcon.au/aisearch/cache/purge/ai-empty?adminToken=your-admin-token
 https://stremio.itcon.au/aisearch/cache/list/tmdb-discover?adminToken=your-admin-token
 https://stremio.itcon.au/aisearch/cache/remove/tmdb-discover?key=discover_series_80_2023-09-01_en-US&adminToken=your-admin-token
 https://stremio.itcon.au/aisearch/cache/clear/all?adminToken=your-admin-token
@@ -503,6 +511,30 @@ https://stremio.itcon.au/aisearch/cache/clear/all?adminToken=your-admin-token
 
 **Keywords-based cache removal response:**
 
+```json
+{
+  "removed": 2,
+  "entries": [
+    {
+      "key": "ocean thriller_movie_no_trakt",
+      "timestamp": "2024-03-20T12:34:56.789Z",
+      "query": "ocean thriller"
+    }
+  ]
+}
+```
+
+**AI empty cache purge response:**
+```json
+{
+  "message": "Purge of empty AI cache entries completed.",
+  "scanned": 150,
+  "purged": 12,
+  "remaining": 138
+}
+```
+
+**Keywords-based cache removal response:**
 ```json
 {
   "removed": 2,

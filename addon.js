@@ -259,6 +259,47 @@ const queryAnalysisCache = new SimpleLRUCache({
   ttl: AI_CACHE_DURATION, // Use the same TTL as other AI caches
 });
 
+/**
+ * Scans the AI recommendations cache and removes any entries that contain no results.
+ * This is useful for cleaning up previously cached empty responses.
+ * @returns {object} An object containing the statistics of the purge operation.
+ */
+function purgeEmptyAiCacheEntries() {
+  const cacheKeys = aiRecommendationsCache.keys();
+  let purgedCount = 0;
+  const totalScanned = cacheKeys.length;
+
+  logger.info("Starting purge of empty AI cache entries...", { totalEntries: totalScanned });
+
+  for (const key of cacheKeys) {
+    const cachedItem = aiRecommendationsCache.get(key);
+
+    // An item is considered "empty" if the data, recommendations, or both movies and series arrays are missing or empty.
+    const recommendations = cachedItem?.data?.recommendations;
+    const hasMovies = recommendations?.movies?.length > 0;
+    const hasSeries = recommendations?.series?.length > 0;
+
+    if (!hasMovies && !hasSeries) {
+      aiRecommendationsCache.delete(key);
+      purgedCount++;
+      logger.debug("Purged empty AI cache entry", { key });
+    }
+  }
+
+  const remaining = aiRecommendationsCache.size;
+  logger.info("Completed purge of empty AI cache entries.", {
+    scanned: totalScanned,
+    purged: purgedCount,
+    remaining: remaining,
+  });
+
+  return {
+    scanned: totalScanned,
+    purged: purgedCount,
+    remaining: remaining,
+  };
+}
+
 // Helper function to merge and deduplicate Trakt items
 function mergeAndDeduplicate(newItems, existingItems) {
   // Create a map of existing items by ID for quick lookup
@@ -457,6 +498,57 @@ async function processPreferencesInParallel(watched, rated, history) {
     directors,
     yearRange,
     ratings,
+  };
+}
+
+/**
+ * Creates a Stremio meta object with a dynamically generated SVG poster for displaying errors.
+ * @param {string} title - The title of the error message.
+ * @param {string} message - The main body of the error message.
+ * @returns {object} A Stremio meta object.
+ */
+function createErrorMeta(title, message) {
+  // Simple text wrapping for the message
+  const words = message.split(' ');
+  let lines = [];
+  let currentLine = words[0] || '';
+  for (let i = 1; i < words.length; i++) {
+    let testLine = currentLine + ' ' + words[i];
+    if (testLine.length > 35) { // Approx characters per line
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = testLine;
+    }
+  }
+  lines.push(currentLine);
+
+  // Generate tspan elements for each line
+  const messageTspans = lines.map((line, index) => `<tspan x="250" y="${560 + index * 30}">${line}</tspan>`).join('');
+
+  const svg = `
+    <svg width="500" height="750" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="#2d2d2d" />
+      <path d="M250 50 L450 400 L50 400 Z" fill="#c0392b"/>
+      <path d="M250 120 L400 380 L100 380 Z" fill="#e74c3c"/>
+      <text fill="white" font-size="60" font-family="Arial, sans-serif" x="250" y="270" text-anchor="middle" font-weight="bold">!</text>
+      <text fill="white" font-size="32" font-family="Arial, sans-serif" x="250" y="500" text-anchor="middle" font-weight="bold">${title}</text>
+      <text fill="white" font-size="24" font-family="Arial, sans-serif" text-anchor="middle">
+        ${messageTspans}
+      </text>
+      <text fill="#bdc3c7" font-size="20" font-family="Arial, sans-serif" x="250" y="700" text-anchor="middle">Please check the addon configuration.</text>
+    </svg>
+  `;
+
+  const posterDataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+
+  return {
+    id: `error:${title.replace(/\s+/g, '_')}`,
+    type: 'movie',
+    name: title,
+    description: message,
+    poster: posterDataUri,
+    posterShape: 'regular',
   };
 }
 
@@ -2591,17 +2683,49 @@ const catalogHandler = async function (args, req) {
   const { id, type, extra } = args;
   let isHomepageQuery = false;
 
-  let searchQuery = "";
-  if (typeof extra === "string" && extra.includes("search=")) {
-    searchQuery = decodeURIComponent(extra.split("search=")[1]);
-  } else if (extra?.search) {
-    searchQuery = extra.search;
-  }
-
   try {
-    const encryptedConfig = req.stremioConfig;
+    const configData = args.config;
 
-    if (!encryptedConfig) {
+    if (!configData || Object.keys(configData).length === 0) {
+      logger.error('Configuration Missing', { reason: 'The addon has not been configured yet. Please set your API keys.' });
+      const errorMeta = createErrorMeta('Configuration Missing', 'The addon has not been configured yet. Please set your API keys.');
+      return { metas: [errorMeta] };
+    }
+
+    const geminiKey = configData.GeminiApiKey;
+    const tmdbKey = configData.TmdbApiKey;
+
+    if (configData.traktConnectionError) {
+      logger.error('Trakt Connection Failed', { reason: 'User access to Trakt.tv has expired or was revoked.' });
+      const errorMeta = createErrorMeta('Trakt Connection Failed', 'Your access to Trakt.tv has expired or was revoked. Please log in again via the addon configuration page.');
+      return { metas: [errorMeta] };
+    }
+    if (!tmdbKey || tmdbKey.length < 10) {
+      logger.error('TMDB API Key Invalid', { reason: 'Your TMDB API key is missing or invalid.' });
+      const errorMeta = createErrorMeta('TMDB API Key Invalid', 'Your TMDB API key is missing or invalid. Please correct it in the addon settings.');
+      return { metas: [errorMeta] };
+    }
+    const tmdbValidationUrl = `https://api.themoviedb.org/3/configuration?api_key=${tmdbKey}`;
+    const tmdbResponse = await fetch(tmdbValidationUrl);
+    if (!tmdbResponse.ok) {
+      logger.error('TMDB API Key Validation Failed', { reason: `The key failed validation (Status: ${tmdbResponse.status}).`, keyUsed: tmdbKey.substring(0, 4) + '...' });
+      const errorMeta = createErrorMeta('TMDB API Key Invalid', `The key failed validation (Status: ${tmdbResponse.status}). Please check your TMDB key in the addon settings.`);
+      return { metas: [errorMeta] };
+    }
+    if (!geminiKey || geminiKey.length < 10) {
+      logger.error('Gemini API Key Invalid', { reason: 'Your Gemini API key is missing or invalid.' });
+      const errorMeta = createErrorMeta('Gemini API Key Invalid', 'Your Gemini API key is missing or invalid. Please correct it in the addon settings.');
+      return { metas: [errorMeta] };
+    }
+
+    let searchQuery = "";
+    if (typeof extra === "string" && extra.includes("search=")) {
+      searchQuery = decodeURIComponent(extra.split("search=")[1]);
+    } else if (extra?.search) {
+      searchQuery = extra.search;
+    }
+
+    if (!configData || Object.keys(configData).length === 0) {
       logger.error("Missing configuration - Please configure the addon first");
       logger.emptyCatalog("Missing configuration", { type, extra });
       return {
@@ -2609,18 +2733,6 @@ const catalogHandler = async function (args, req) {
         error: "Please configure the addon with valid API keys first",
       };
     }
-
-    const decryptedConfigStr = decryptConfig(encryptedConfig);
-    if (!decryptedConfigStr) {
-      logger.error("Invalid configuration - Please reconfigure the addon");
-      logger.emptyCatalog("Invalid configuration", { type, extra });
-      return {
-        metas: [],
-        error: "Invalid configuration detected. Please reconfigure the addon.",
-      };
-    }
-
-    const configData = JSON.parse(decryptedConfigStr);
 
     if (!searchQuery) {
       if (id === "aisearch.recommend") {
@@ -2657,7 +2769,8 @@ const catalogHandler = async function (args, req) {
       } else {
         logger.error("No search query provided");
         logger.emptyCatalog("No search query provided", { type, extra });
-        return { metas: [] };
+        const errorMeta = createErrorMeta('Search Required', 'Please enter a search term to get AI recommendations.');
+        return { metas: [errorMeta] }
       }
     }
 
@@ -2669,8 +2782,6 @@ const catalogHandler = async function (args, req) {
       traktAccessTokenLength: configData.TraktAccessToken?.length || 0,
     });
 
-    const geminiKey = configData.GeminiApiKey;
-    const tmdbKey = configData.TmdbApiKey;
     const geminiModel = configData.GeminiModel || DEFAULT_GEMINI_MODEL;
     const language = configData.TmdbLanguage || "en-US";
 
@@ -2750,7 +2861,7 @@ const catalogHandler = async function (args, req) {
     // If the intent is specific (not ambiguous) and doesn't match the requested type,
     // return empty results regardless of whether it's a recommendation or search
     if (intent !== "ambiguous" && intent !== type) {
-      logger.debug("Intent mismatch - returning empty results", {
+      logger.error("Intent mismatch - returning empty results", {
         intent,
         type,
         searchQuery,
@@ -2824,11 +2935,13 @@ const catalogHandler = async function (args, req) {
 
       // Log if we couldn't discover any genres for a recommendation query
       if (discoveredGenres.length === 0) {
-        logger.emptyCatalog("No genres discovered for recommendation query", {
-          type,
-          searchQuery,
-          isRecommendation: true,
-        });
+        if (ENABLE_LOGGING) {
+          logger.emptyCatalog("No genres discovered for recommendation query", {
+            type,
+            searchQuery,
+            isRecommendation: true,
+          });
+        }
       }
 
       logger.info("Genre discovery results", {
@@ -2876,13 +2989,15 @@ const catalogHandler = async function (args, req) {
               filteredTraktData.highlyRated.length === 0 &&
               filteredTraktData.lowRated.length === 0
             ) {
-              logger.emptyCatalog("No Trakt data matches discovered genres", {
-                type,
-                searchQuery,
-                discoveredGenres,
-                totalWatched: traktData.watched.length,
-                totalRated: traktData.rated.length,
-              });
+              if (ENABLE_LOGGING) {
+                logger.emptyCatalog("No Trakt data matches discovered genres", {
+                  type,
+                  searchQuery,
+                  discoveredGenres,
+                  totalWatched: traktData.watched.length,
+                  totalRated: traktData.rated.length,
+                });
+              }
             }
           } else {
             // When no genres are discovered, use all Trakt data
@@ -2966,6 +3081,17 @@ const catalogHandler = async function (args, req) {
           type,
         });
 
+        if (selectedRecommendations.length === 0) {
+          logger.error("AI returned no valid recommendations", { 
+            query: searchQuery, 
+            type: type,
+            model: geminiModel,
+            responseText: text
+          });
+          const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+          return { metas: [errorMeta] };
+        }
+
         const metaPromises = selectedRecommendations.map((item) =>
           toStremioMeta(
             item,
@@ -2980,6 +3106,16 @@ const catalogHandler = async function (args, req) {
         );
 
         const metas = (await Promise.all(metaPromises)).filter(Boolean);
+
+        if (metas.length === 0 && !exactMatchMeta) {
+          logger.error("All AI recommendations failed TMDB lookup", {
+            query: searchQuery,
+            type: type,
+            recommendationCount: selectedRecommendations.length
+          });
+          const errorMeta = createErrorMeta('Data Fetch Error', 'Could not retrieve details for any of the AI recommendations. This may be a temporary TMDB issue.');
+          return { metas: [errorMeta] };
+        }
 
         logger.debug("Catalog handler response from cache", {
           metasCount: metas.length,
@@ -2998,6 +3134,12 @@ const catalogHandler = async function (args, req) {
             totalResults: finalMetas.length,
             exactMatchId: exactMatchMeta.id,
           });
+        }
+
+        if (finalMetas.length === 0) {
+            logger.error("No results found for query (from cache)", { query: searchQuery, type: type });
+            const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+            return { metas: [errorMeta] };
         }
 
         // Increment counter for successful cached results
@@ -3544,8 +3686,12 @@ const catalogHandler = async function (args, req) {
         }
       }
 
+      const recommendationsToCache = finalResult.recommendations;
+      const hasMoviesToCache = recommendationsToCache.movies && recommendationsToCache.movies.length > 0;
+      const hasSeriesToCache = recommendationsToCache.series && recommendationsToCache.series.length > 0;
+
       // Only cache if there's no Trakt data (not user-specific) and it's not a homepage query
-      if (!traktData && !isHomepageQuery && enableAiCache) {
+      if ((hasMoviesToCache || hasSeriesToCache) && !traktData && !isHomepageQuery && enableAiCache) {
         aiRecommendationsCache.set(cacheKey, {
           timestamp: Date.now(),
           data: finalResult,
@@ -3561,28 +3707,22 @@ const catalogHandler = async function (args, req) {
         });
       } else {
         // Log the reason for not caching
-        if (isHomepageQuery) {
-          logger.debug("AI recommendations not cached (dynamic homepage query)", {
-            duration: Date.now() - startTime,
-            query: searchQuery,
-            type,
-          });
+        let reason = "";
+        if (!(hasMoviesToCache || hasSeriesToCache)) {
+          reason = "Result was empty";
+        } else if (isHomepageQuery) {
+          reason = "Dynamic homepage query";
         } else if (traktData) {
-          logger.debug(
-            "AI recommendations not cached (user-specific Trakt data)",
-            {
-              duration: Date.now() - startTime,
-              query: searchQuery,
-              type,
-            }
-          );
+          reason = "User-specific Trakt data";
         } else if (!enableAiCache) {
-          logger.debug("AI recommendations not cached (disabled in config)", {
-            cacheKey,
-            query: searchQuery,
-            type,
-          });
+          reason = "AI cache disabled in config";
         }
+        logger.debug("AI recommendations not cached", {
+          reason,
+          duration: Date.now() - startTime,
+          query: searchQuery,
+          type,
+        });
       }
 
       // Convert recommendations to Stremio meta objects
@@ -3659,6 +3799,12 @@ const catalogHandler = async function (args, req) {
         });
       }
 
+      if (finalMetas.length === 0) {
+          logger.error("No results found for query (from live API call)", { query: searchQuery, type: type });
+          const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+          return { metas: [errorMeta] };
+      }
+
       // Only increment the counter if we're returning non-empty results
       if (finalMetas.length > 0 && isSearchRequest) {
         incrementQueryCounter();
@@ -3670,32 +3816,22 @@ const catalogHandler = async function (args, req) {
 
       return { metas: finalMetas };
     } catch (error) {
-      logger.error("Gemini API Error:", {
-        error: error.message,
-        stack: error.stack,
-        params: {
-          query: searchQuery,
-          type,
-          geminiKeyLength: geminiKey?.length,
-        },
-      });
-      logger.emptyCatalog("Gemini API Error", {
-        type,
-        searchQuery,
-        error: error.message,
-      });
-      return { metas: [] };
+      logger.error("Gemini API Error:", { error: error.message, stack: error.stack, query: searchQuery });
+      let errorMessage = 'The AI model failed to respond. This may be a temporary issue.';
+      if (error.message.includes('400') || error.message.includes('API key not valid')) {
+        errorMessage = 'Your Gemini API key is invalid or has been revoked. Please update it in the settings.';
+      } else if (error.message.includes('quota')) {
+        errorMessage = 'You have exceeded your Gemini API quota for the day. Please check your Google AI Studio account.';
+      } else if (error.message.includes('404')) {
+          errorMessage = 'The selected Gemini Model is invalid or not found. Please try a different model in the settings.';
+      }
+      const errorMeta = createErrorMeta('AI Error', errorMessage);
+      return { metas: [errorMeta] };
     }
   } catch (error) {
-    logger.error("Catalog processing error", {
-      error: error.message,
-      stack: error.stack,
-    });
-    logger.emptyCatalog("Catalog processing error", {
-      type,
-      error: error.message,
-    });
-    return { metas: [] };
+    logger.error("Catalog processing error", { error: error.message, stack: error.stack });
+    const errorMeta = createErrorMeta('Addon Error', 'A critical error occurred. Please check the server logs for more details.');
+    return { metas: [errorMeta] };
   }
 };
 
@@ -3858,6 +3994,7 @@ module.exports = {
   clearTmdbDiscoverCache,
   clearAiCache,
   removeAiCacheByKeywords,
+  purgeEmptyAiCacheEntries,
   clearRpdbCache,
   clearTraktCache,
   clearTraktRawDataCache,
