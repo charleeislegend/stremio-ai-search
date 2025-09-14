@@ -351,6 +351,10 @@ async function startServer() {
     await initDb();
     // Load caches from files on startup
     await loadCachesFromFiles();
+    const { purgeEmptyAiCacheEntries } = require("./addon");
+    logger.info("Running a one-time purge of empty AI cache entries...");
+    const purgeStats = purgeEmptyAiCacheEntries();
+    logger.info("Empty AI cache purge complete.", { purged: purgeStats.purged, remaining: purgeStats.remaining });
 
     // Set up periodic cache saving
     setInterval(async () => {
@@ -1016,6 +1020,30 @@ async function startServer() {
               error: error.message,
               stack: error.stack,
               keywords: req.query.keywords,
+            });
+            res.status(500).json({
+              error: "Internal server error",
+              message: error.message,
+            });
+          }
+        }
+      );
+
+      addonRouter.get(
+        routePath + "cache/purge/ai-empty",
+        validateAdminToken,
+        (req, res) => {
+          try {
+            const { purgeEmptyAiCacheEntries } = require("./addon");
+            const stats = purgeEmptyAiCacheEntries();
+            res.json({
+              message: "Purge of empty AI cache entries completed.",
+              ...stats
+            });
+          } catch (error) {
+            logger.error("Error in cache/purge/ai-empty endpoint:", {
+              error: error.message,
+              stack: error.stack,
             });
             res.status(500).json({
               error: "Internal server error",

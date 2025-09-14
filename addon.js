@@ -259,6 +259,47 @@ const queryAnalysisCache = new SimpleLRUCache({
   ttl: AI_CACHE_DURATION, // Use the same TTL as other AI caches
 });
 
+/**
+ * Scans the AI recommendations cache and removes any entries that contain no results.
+ * This is useful for cleaning up previously cached empty responses.
+ * @returns {object} An object containing the statistics of the purge operation.
+ */
+function purgeEmptyAiCacheEntries() {
+  const cacheKeys = aiRecommendationsCache.keys();
+  let purgedCount = 0;
+  const totalScanned = cacheKeys.length;
+
+  logger.info("Starting purge of empty AI cache entries...", { totalEntries: totalScanned });
+
+  for (const key of cacheKeys) {
+    const cachedItem = aiRecommendationsCache.get(key);
+
+    // An item is considered "empty" if the data, recommendations, or both movies and series arrays are missing or empty.
+    const recommendations = cachedItem?.data?.recommendations;
+    const hasMovies = recommendations?.movies?.length > 0;
+    const hasSeries = recommendations?.series?.length > 0;
+
+    if (!hasMovies && !hasSeries) {
+      aiRecommendationsCache.delete(key);
+      purgedCount++;
+      logger.debug("Purged empty AI cache entry", { key });
+    }
+  }
+
+  const remaining = aiRecommendationsCache.size;
+  logger.info("Completed purge of empty AI cache entries.", {
+    scanned: totalScanned,
+    purged: purgedCount,
+    remaining: remaining,
+  });
+
+  return {
+    scanned: totalScanned,
+    purged: purgedCount,
+    remaining: remaining,
+  };
+}
+
 // Helper function to merge and deduplicate Trakt items
 function mergeAndDeduplicate(newItems, existingItems) {
   // Create a map of existing items by ID for quick lookup
@@ -3954,6 +3995,7 @@ module.exports = {
   clearTmdbDiscoverCache,
   clearAiCache,
   removeAiCacheByKeywords,
+  purgeEmptyAiCacheEntries,
   clearRpdbCache,
   clearTraktCache,
   clearTraktRawDataCache,
