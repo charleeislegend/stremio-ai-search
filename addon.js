@@ -2728,7 +2728,8 @@ const catalogHandler = async function (args, req) {
       } else {
         logger.error("No search query provided");
         logger.emptyCatalog("No search query provided", { type, extra });
-        return { metas: [] };
+        const errorMeta = createErrorMeta('Search Required', 'Please enter a search term to get AI recommendations.');
+        return { metas: [errorMeta] }
       }
     }
 
@@ -2827,7 +2828,8 @@ const catalogHandler = async function (args, req) {
           isRecommendationQuery(searchQuery) ? "recommendation" : "search"
         } appears to be for ${intent}, not ${type}`,
       });
-      return { metas: [] };
+      const errorMeta = createErrorMeta('Wrong Category', `Your query is for a ${intent}. Please perform this search in the "${intent.charAt(0).toUpperCase() + intent.slice(1)} Search" category.`);
+      return { metas: [errorMeta] };
     }
 
     let exactMatchMeta = null;
@@ -3092,6 +3094,12 @@ const catalogHandler = async function (args, req) {
             totalResults: finalMetas.length,
             exactMatchId: exactMatchMeta.id,
           });
+        }
+
+        if (finalMetas.length === 0) {
+            logger.error("No results found for query (from cache)", { query: searchQuery, type: type });
+            const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+            return { metas: [errorMeta] };
         }
 
         // Increment counter for successful cached results
@@ -3638,8 +3646,12 @@ const catalogHandler = async function (args, req) {
         }
       }
 
+      const recommendationsToCache = finalResult.recommendations;
+      const hasMoviesToCache = recommendationsToCache.movies && recommendationsToCache.movies.length > 0;
+      const hasSeriesToCache = recommendationsToCache.series && recommendationsToCache.series.length > 0;
+
       // Only cache if there's no Trakt data (not user-specific) and it's not a homepage query
-      if (!traktData && !isHomepageQuery && enableAiCache) {
+      if ((hasMoviesToCache || hasSeriesToCache) && !traktData && !isHomepageQuery && enableAiCache) {
         aiRecommendationsCache.set(cacheKey, {
           timestamp: Date.now(),
           data: finalResult,
@@ -3655,28 +3667,22 @@ const catalogHandler = async function (args, req) {
         });
       } else {
         // Log the reason for not caching
-        if (isHomepageQuery) {
-          logger.debug("AI recommendations not cached (dynamic homepage query)", {
-            duration: Date.now() - startTime,
-            query: searchQuery,
-            type,
-          });
+        let reason = "";
+        if (!(hasMoviesToCache || hasSeriesToCache)) {
+          reason = "Result was empty";
+        } else if (isHomepageQuery) {
+          reason = "Dynamic homepage query";
         } else if (traktData) {
-          logger.debug(
-            "AI recommendations not cached (user-specific Trakt data)",
-            {
-              duration: Date.now() - startTime,
-              query: searchQuery,
-              type,
-            }
-          );
+          reason = "User-specific Trakt data";
         } else if (!enableAiCache) {
-          logger.debug("AI recommendations not cached (disabled in config)", {
-            cacheKey,
-            query: searchQuery,
-            type,
-          });
+          reason = "AI cache disabled in config";
         }
+        logger.debug("AI recommendations not cached", {
+          reason,
+          duration: Date.now() - startTime,
+          query: searchQuery,
+          type,
+        });
       }
 
       // Convert recommendations to Stremio meta objects
@@ -3751,6 +3757,12 @@ const catalogHandler = async function (args, req) {
           totalResults: finalMetas.length,
           exactMatchId: exactMatchMeta.id,
         });
+      }
+
+      if (finalMetas.length === 0) {
+          logger.error("No results found for query (from live API call)", { query: searchQuery, type: type });
+          const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
+          return { metas: [errorMeta] };
       }
 
       // Only increment the counter if we're returning non-empty results
