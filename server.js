@@ -16,7 +16,7 @@ try {
 }
 
 const { serveHTTP } = require("stremio-addon-sdk");
-const { addonInterface, catalogHandler } = require("./addon");
+const { addonInterface, catalogHandler, determineIntentFromKeywords } = require("./addon");
 const express = require("express");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
@@ -525,25 +525,53 @@ async function startServer() {
           let manifestWithConfig = {
             ...addonInterface.manifest,
           };
-          let enableHomepage = true;
+          
+          // Start with only the search catalogs from the base manifest
+          manifestWithConfig.catalogs = manifestWithConfig.catalogs.filter(
+              catalog => catalog.isSearch === true
+          );
+
           if (encryptedConfig && isValidEncryptedFormat(encryptedConfig)) {
             const decryptedConfigStr = decryptConfig(encryptedConfig);
             if (decryptedConfigStr) {
               try {
                 const configData = JSON.parse(decryptedConfigStr);
-                if (configData.EnableHomepage !== undefined) {
-                  enableHomepage = configData.EnableHomepage;
+                const enableHomepage = configData.EnableHomepage !== undefined ? configData.EnableHomepage : true;
+                const homepageQueries = configData.HomepageQuery;
+
+                if (enableHomepage && homepageQueries && typeof homepageQueries === 'string') {
+                    const queries = homepageQueries.split(',').map(q => q.trim()).filter(Boolean);
+                    const homepageCatalogs = [];
+
+                    queries.forEach((query, index) => {
+                        const intent = determineIntentFromKeywords(query);
+                        const id_prefix = `aisearch.home.${index}`;
+                        const name = query.charAt(0).toUpperCase() + query.slice(1);
+
+                        if (intent === 'movie' || intent === 'ambiguous') {
+                            homepageCatalogs.push({
+                                type: 'movie',
+                                id: `${id_prefix}.movie`,
+                                name: `${name}`
+                            });
+                        }
+                        if (intent === 'series' || intent === 'ambiguous') {
+                            homepageCatalogs.push({
+                                type: 'series',
+                                id: `${id_prefix}.series`,
+                                name: `${name}`
+                            });
+                        }
+                    });
+
+                    manifestWithConfig.catalogs.push(...homepageCatalogs);
                 }
               } catch (e) {
                 logger.warn("Failed to parse decrypted config for manifest generation", { error: e.message });
               }
             }
           }
-          if (!enableHomepage) {
-            manifestWithConfig.catalogs = manifestWithConfig.catalogs.filter(
-              catalog => catalog.id !== 'aisearch.recommend'
-            );
-          }
+
           manifestWithConfig.behaviorHints = {
             ...manifestWithConfig.behaviorHints,
             configurationRequired: !encryptedConfig,
@@ -1458,7 +1486,7 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       errors: {},
     };
     
-    const modelToUse = GeminiModel || "gemini-1.5-flash-latest";
+    const modelToUse = GeminiModel || "gemini-2.5-flash-lite";
 
     if (ENABLE_LOGGING) {
       logger.debug("Validation request received", {
