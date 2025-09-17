@@ -22,3 +22,4 @@ howto.txt
 
 # Server specific
 monitor.sh
+trakt_tokens.db
