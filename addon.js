@@ -2994,10 +2994,10 @@ const catalogHandler = async function (args, req) {
               recentlyWatched: traktData.watched?.slice(0, 100) || [],
               highlyRated: (traktData.rated || [])
                 .filter((item) => item.rating >= 4)
-                .slice(0, 100),
+                .slice(0, 25),
               lowRated: (traktData.rated || [])
                 .filter((item) => item.rating <= 2)
-                .slice(0, 100),
+                .slice(0, 25),
             };
 
             logger.info(
@@ -3203,13 +3203,13 @@ const catalogHandler = async function (args, req) {
           // Otherwise, use all Trakt data (when no specific genres are discovered)
           const { recentlyWatched, highlyRated, lowRated } =
             filteredTraktData || {
-              recentlyWatched: traktData.watched?.slice(0, 25) || [],
+              recentlyWatched: traktData.watched?.slice(0, 100) || [],
               highlyRated: (traktData.rated || [])
                 .filter((item) => item.rating >= 4)
                 .slice(0, 25),
               lowRated: (traktData.rated || [])
                 .filter((item) => item.rating <= 2)
-                .slice(0, 15),
+                .slice(0, 25),
             };
 
           // Calculate genre overlap if we have discovered genres
