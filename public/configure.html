@@ -793,7 +793,7 @@
               <option value="zu-ZA">Zulu (South Africa)</option>
             </select>
             <div class="help-text">
-              Select the language for movie and series information
+              Select the language to display movie and series titles (Description will still be in English)
             </div>
           </div>
 
@@ -1474,6 +1474,7 @@
                 "Update Configuration in Stremio";
               document.getElementById("copyBtn").textContent =
                 "Copy Updated URL";
+              validateAndRefreshTraktToken();
             })
             .catch((error) => {
               console.error("Error loading configuration:", error);
@@ -1676,9 +1677,6 @@ window.addEventListener("message", async function (event) {
           // Clear the saved form data
           sessionStorage.removeItem("formData");
         }
-
-        // Always validate Trakt status on page load
-        setTimeout(validateAndRefreshTraktToken, 200);
       });
 
       function openIssueModal() {
