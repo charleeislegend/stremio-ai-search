@@ -15,7 +15,7 @@ An intelligent search addon for Stremio powered by Google's Gemini AI. Get perso
 - You can set the number of recommendations AI should return for a query (30 Max)
 - TMDB integration ensures you have a content rich catalog for movies and series
 - RPDB integration gives you access to awesome posters with inbuilt ratings
-- Optional Movie and Series recommendation poster in homescreen
+- Optional Movie and Series recommendation catalogs in homescreen (Multiple supported)
 - Optional Adult content recommendation
 - AI based Similar items recommendation in streams view
 - Error Posters in case of errors for better user experience
@@ -31,6 +31,38 @@ An intelligent search addon for Stremio powered by Google's Gemini AI. Get perso
    <a href="https://buymeacoffee.com/itcon">
    <img src="public/bmc.png" alt="Buy Me A Coffee" height="40" />
    </a>
+
+## Customizing Your Homepage
+
+One of the most powerful features of this addon is the ability to create your own recommendation rows directly on the Stremio homepage. In the addon configuration, you can provide a comma-separated list of queries in the "Custom Homepage Queries" field.
+
+Each query in the list will generate one or two new catalogs on your board, depending on whether the query is for movies, series, or both.
+
+### Tips for Effective Homepage Queries
+
+-   **Use a Comma-Separated List**: To create multiple rows, separate each query with a comma.
+    -   *Example*: `80s sci-fi movies, new comedy series, recommend thrillers`
+
+-   **Get Personalized Recommendations**: Start your query with the word `recommend` to use your Trakt.tv watch history (last 100) and ratings (last 100 high & low ratings) for highly personalized suggestions.
+    -   *Example*: `recommend feel-good movies` will find movies similar to what you've watched and liked on Trakt.
+
+-   **Find the Latest Content**: Use keywords like `new`, `latest`, or `recent` to find the most up-to-date movies and shows.
+    -   *Example*: `new popular series` or `latest anime movies`.
+
+-   **Be Specific**: The addon is smart. If you ask for "anime series," it will only create a Series catalog. If you ask for "Pixar movies," it will only create a Movie catalog. For ambiguous queries like "mystery thriller," it will create one for movies and one for series.
+
+### Example Homepage Configuration
+
+An example setting in the configuration page could be:
+`recommend mind-bending thrillers, new popular series, best of A24, 90s anime`
+
+This would generate the following catalogs on your Stremio homepage:
+-   `Recommend mind-bending thrillers - Movie`
+-   `Recommend mind-bending thrillers - Series`
+-   `New popular series - Series`
+-   `Best of A24 - Movie`
+-   `90s anime - Movie`
+-   `90s anime - Series`
 
 ## Query ideas
 

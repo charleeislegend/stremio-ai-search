@@ -563,9 +563,9 @@ async function fetchTraktIncrementalData(
   const startDate = new Date(lastUpdate).toISOString().split(".")[0] + "Z";
 
   const endpoints = [
-    `${TRAKT_API_BASE}/users/me/watched/${type}?extended=full&start_at=${startDate}`,
-    `${TRAKT_API_BASE}/users/me/ratings/${type}?extended=full&start_at=${startDate}`,
-    `${TRAKT_API_BASE}/users/me/history/${type}?extended=full&start_at=${startDate}`,
+    `${TRAKT_API_BASE}/users/me/watched/${type}?extended=full&start_at=${startDate}&page=1&limit=100`,
+    `${TRAKT_API_BASE}/users/me/ratings/${type}?extended=full&start_at=${startDate}&page=1&limit=100`,
+    `${TRAKT_API_BASE}/users/me/history/${type}?extended=full&start_at=${startDate}&page=1&limit=100`,
   ];
 
   const headers = {
@@ -711,9 +711,9 @@ async function fetchTraktWatchedAndRated(
       const fetchStart = Date.now();
       // Use the original fetch logic for a full refresh but without limits
       const endpoints = [
-        `${TRAKT_API_BASE}/users/me/watched/${type}?extended=full`,
-        `${TRAKT_API_BASE}/users/me/ratings/${type}?extended=full`,
-        `${TRAKT_API_BASE}/users/me/history/${type}?extended=full`,
+        `${TRAKT_API_BASE}/users/me/watched/${type}?extended=full&page=1&limit=100`,
+        `${TRAKT_API_BASE}/users/me/ratings/${type}?extended=full&page=1&limit=100`,
+        `${TRAKT_API_BASE}/users/me/history/${type}?extended=full&page=1&limit=100`,
       ];
 
       const headers = {
@@ -2615,19 +2615,19 @@ function filterTraktDataByGenres(traktData, genres) {
   };
 
   // Filter watched items by genre
-  const recentlyWatched = (watched || []).filter(hasMatchingGenre).slice(0, 25); // Last 25 watched in these genres
+  const recentlyWatched = (watched || []).filter(hasMatchingGenre).slice(0, 100);
 
   // Filter highly rated items (4-5 stars)
   const highlyRated = (rated || [])
     .filter((item) => item.rating >= 4)
     .filter(hasMatchingGenre)
-    .slice(0, 25); // Top 25 highly rated
+    .slice(0, 100); // Top 100 highly rated
 
   // Filter low rated items (1-2 stars)
   const lowRated = (rated || [])
     .filter((item) => item.rating <= 2)
     .filter(hasMatchingGenre)
-    .slice(0, 15); // Top 15 low rated
+    .slice(0, 100); // Top 100 low rated
 
   return {
     recentlyWatched,
@@ -2735,36 +2735,25 @@ const catalogHandler = async function (args, req) {
     }
 
     if (!searchQuery) {
-      if (id === "aisearch.recommend") {
+      if (id.startsWith("aisearch.home.")) {
         isHomepageQuery = true;
         const customHomepageQuery = configData.HomepageQuery;
-
-        // Prioritize user's custom homepage query
-        if (customHomepageQuery && customHomepageQuery.trim() !== "") {
-          searchQuery = customHomepageQuery.trim();
-          logger.info("Using user-defined homepage query", {
-            type,
-            query: searchQuery,
-          });
-        } else {
-          // Fallback to existing random prompt logic
-          if (type === "movie") {
-            const randomIndex = Math.floor(
-              Math.random() * movieRecommendationPrompts.length
-            );
-            searchQuery = movieRecommendationPrompts[randomIndex];
-          } else if (type === "series") {
-            const randomIndex = Math.floor(
-              Math.random() * seriesRecommendationPrompts.length
-            );
-            searchQuery = seriesRecommendationPrompts[randomIndex];
-          } else {
-            searchQuery = "Recommend something great to watch.";
+        const idParts = id.split("."); // e.g., ['aisearch', 'home', '0', 'movie']
+        
+        if (idParts.length === 4 && customHomepageQuery) {
+          const queryIndex = parseInt(idParts[2], 10);
+          const queries = customHomepageQuery.split(",").map(q => q.trim());
+          if (!isNaN(queryIndex) && queries[queryIndex]) {
+            searchQuery = queries[queryIndex];
+            logger.info("Using custom homepage query from list", { type, query: searchQuery, index: queryIndex });
           }
-          logger.info("Using dynamic recommendation query", {
-            type,
-            query: searchQuery,
-          });
+        }
+
+        // If after all that, we still don't have a search query, it's an error.
+        if (!searchQuery) {
+          logger.error("Failed to resolve homepage query from ID and config", { id });
+          const errorMeta = createErrorMeta('Configuration Error', 'Could not find the matching homepage query for this catalog.');
+          return { metas: [errorMeta] };
         }
       } else {
         logger.error("No search query provided");
@@ -2806,8 +2795,8 @@ const catalogHandler = async function (args, req) {
     const rpdbKey = configData.RpdbApiKey || DEFAULT_RPDB_KEY;
     const rpdbPosterType = configData.RpdbPosterType || "poster-default";
     let numResults = parseInt(configData.NumResults) || 20;
-    // Limit numResults to a maximum of 25
-    if (numResults > 25) {
+    // Limit numResults to a maximum of 30
+    if (numResults > 30) {
       numResults = MAX_AI_RECOMMENDATIONS;
     }
     const enableAiCache =
@@ -3002,13 +2991,13 @@ const catalogHandler = async function (args, req) {
           } else {
             // When no genres are discovered, use all Trakt data
             filteredTraktData = {
-              recentlyWatched: traktData.watched?.slice(0, 25) || [],
+              recentlyWatched: traktData.watched?.slice(0, 100) || [],
               highlyRated: (traktData.rated || [])
                 .filter((item) => item.rating >= 4)
-                .slice(0, 25),
+                .slice(0, 100),
               lowRated: (traktData.rated || [])
                 .filter((item) => item.rating <= 2)
-                .slice(0, 15),
+                .slice(0, 100),
             };
 
             logger.info(
@@ -4011,4 +4000,5 @@ module.exports = {
   listTmdbDiscoverCacheKeys,
   getRpdbTierFromApiKey,
   searchTMDBExactMatch,
+  determineIntentFromKeywords,
 };
