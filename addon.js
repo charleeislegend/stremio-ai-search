@@ -1105,26 +1105,30 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includ
 async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", includeAdult = false) {
   const startTime = Date.now();
   logger.debug("Starting TMDB exact match search", { title, type, includeAdult });
-  const cacheKey = `exact_${title}-${type}-${language}-adult:${includeAdult}`;
+  const cacheKey = `tmdb_search_${title}-${type}-${language}-adult:${includeAdult}`;
+  logger.debug("Starting TMDB search", { title, type, includeAdult });
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
-    logger.info("TMDB exact match cache hit", {
+    logger.info("TMDB search cache hit", {
       cacheKey,
       cachedAt: new Date(cached.timestamp).toISOString(),
       age: `${Math.round((Date.now() - cached.timestamp) / 1000)}s`,
-      responseTime: `${Date.now() - startTime}ms`,
-      title,
-      type,
-      language,
+      resultCount: cached.data?.length || 0,
     });
-    return cached.data;
+    const responseData = cached.data;
+    if (responseData && responseData.length > 0) {
+        const normalizedTitle = title.toLowerCase().trim();
+        const exactMatch = responseData.find((result) => {
+            const resultTitle = (result.title || result.name || "").toLowerCase().trim();
+            return resultTitle === normalizedTitle;
+        });
+        return { isExactMatch: !!exactMatch, results: responseData };
+    }
+    return { isExactMatch: false, results: [] };
   }
-  logger.info("TMDB exact match cache miss", {
-    cacheKey,
-    title,
-    type,
-    language,
-  });
+  
+  logger.info("TMDB search cache miss", { cacheKey, title, type, language });
+
   try {
     const searchType = type === "movie" ? "movie" : "tv";
     const searchParams = new URLSearchParams({
@@ -1134,7 +1138,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", in
       language: language,
     });
     const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
-    logger.info("Making TMDB exact match API call", {
+    logger.info("Making TMDB search API call", {
       url: searchUrl.replace(tmdbKey, "***"),
       params: { type: searchType, query: title, language },
     });
@@ -1165,13 +1169,21 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", in
         maxRetries: 3,
         initialDelay: 1000,
         maxDelay: 8000,
-        operationName: "TMDB exact match search API call",
+        operationName: "TMDB search API call",
         shouldRetry: (error) =>
           !error.isInvalidKey &&
           (!error.status || error.status >= 500 || error.isRateLimit),
       }
     );
-    if (responseData?.results?.length > 0) {
+
+    const results = responseData?.results || [];
+    tmdbCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: results,
+    });
+    logger.info("TMDB search results cached", { cacheKey, count: results.length });
+
+    if (results.length > 0) {
       const normalizedTitle = title.toLowerCase().trim();
       const exactMatch = responseData.results.find((result) => {
         const resultTitle = (result.title || result.name || "")
@@ -1180,120 +1192,29 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", in
         return resultTitle === normalizedTitle;
       });
       if (exactMatch) {
-        const tmdbData = {
-          poster: exactMatch.poster_path
-            ? `https://image.tmdb.org/t/p/w500${exactMatch.poster_path}`
-            : null,
-          backdrop: exactMatch.backdrop_path
-            ? `https://image.tmdb.org/t/p/original${exactMatch.backdrop_path}`
-            : null,
-          tmdbRating: exactMatch.vote_average,
-          genres: exactMatch.genre_ids,
-          overview: exactMatch.overview || "",
-          tmdb_id: exactMatch.id,
-          title: exactMatch.title || exactMatch.name,
-          release_date: exactMatch.release_date || exactMatch.first_air_date,
-        };
-        const detailsCacheKey = `details_${searchType}_${exactMatch.id}_${language}`;
-        let detailsData;
-        if (tmdbDetailsCache.has(detailsCacheKey)) {
-          const cachedDetails = tmdbDetailsCache.get(detailsCacheKey);
-          logger.info("TMDB exact match details cache hit", {
-            cacheKey: detailsCacheKey,
-            tmdbId: exactMatch.id,
-            cachedAt: new Date(cachedDetails.timestamp).toISOString(),
-            age: `${Math.round(
-              (Date.now() - cachedDetails.timestamp) / 1000
-            )}s`,
-          });
-          detailsData = cachedDetails.data;
-        } else {
-          const detailsUrl = `${TMDB_API_BASE}/${searchType}/${exactMatch.id}?api_key=${tmdbKey}&append_to_response=external_ids&language=${language}`;
-          logger.info("Making TMDB exact match details API call", {
-            url: detailsUrl.replace(tmdbKey, "***"),
-            movieId: exactMatch.id,
-            type: searchType,
-          });
-          detailsData = await withRetry(
-            async () => {
-              const detailsResponse = await fetch(detailsUrl);
-              if (!detailsResponse.ok) {
-                const errorData = await detailsResponse
-                  .json()
-                  .catch(() => ({}));
-                const error = new Error(
-                  `TMDB details API error: ${detailsResponse.status} ${
-                    errorData?.status_message || ""
-                  }`
-                );
-                error.status = detailsResponse.status;
-                throw error;
-              }
-              return detailsResponse.json();
-            },
-            {
-              maxRetries: 3,
-              initialDelay: 1000,
-              maxDelay: 8000,
-              operationName: "TMDB exact match details API call",
-            }
-          );
-          tmdbDetailsCache.set(detailsCacheKey, {
-            timestamp: Date.now(),
-            data: detailsData,
-          });
-        }
-        if (detailsData) {
-          tmdbData.imdb_id =
-            detailsData.imdb_id || detailsData.external_ids?.imdb_id;
-        }
-        tmdbCache.set(cacheKey, {
-          timestamp: Date.now(),
-          data: tmdbData,
-        });
-        logger.info("TMDB exact match found", {
-          title,
-          type,
-          exactMatchTitle: tmdbData.title,
-          tmdbId: tmdbData.tmdb_id,
-          hasImdbId: !!tmdbData.imdb_id,
-          duration: Date.now() - startTime,
-        });
-        return tmdbData;
+        logger.info("TMDB exact match found within results", { title, exactMatchTitle: exactMatch.title || exactMatch.name });
       }
+      return { isExactMatch: !!exactMatch, results: results };
     }
     logger.debug("No TMDB exact match found", {
       title,
       type,
-      duration: Date.now() - startTime,
-      totalResults: responseData?.results?.length || 0,
+      duration: Date.now() - startTime
     });
-    tmdbCache.set(cacheKey, {
-      timestamp: Date.now(),
-      data: null,
-    });
-    return null;
+    return { isExactMatch: false, results: [] };
   } catch (error) {
-    logger.error("TMDB Exact Match Search Error:", {
-      error: error.message,
-      stack: error.stack,
-      errorType: error.isRateLimit
-        ? "rate_limit"
-        : error.isInvalidKey
-        ? "invalid_key"
-        : error.status
-        ? `http_${error.status}`
-        : "unknown",
-      params: { title, type, tmdbKeyLength: tmdbKey?.length },
-      retryAttempts: error.retryCount || 0,
+    logger.error("TMDB Search Error:", {
+        error: error.message,
+        stack: error.stack,
+        params: { title, type },
     });
-    return null;
+    return { isExactMatch: false, results: [] };
   }
 }
 
 const manifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.63",
+  version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   resources: [
@@ -2960,47 +2881,59 @@ const catalogHandler = async function (args, req) {
     }
 
     let exactMatchMeta = null;
+    let tmdbInitialResults = [];
+    let matchResult = null; 
+
     if (!isRecommendationQuery(searchQuery)) {
-      logger.info("Checking for TMDB exact match", {
+      logger.info("Checking for TMDB exact match and gathering initial results", {
         searchQuery,
         type,
       });
-      const exactMatchData = await searchTMDBExactMatch(
+      
+      matchResult = await searchTMDBExactMatch(
         searchQuery,
         type,
         tmdbKey,
         language,
         includeAdult
       );
-      if (exactMatchData && exactMatchData.imdb_id) {
-        const exactMatchItem = {
-          id: `exact_${exactMatchData.tmdb_id}`,
-          name: exactMatchData.title,
-          year: exactMatchData.release_date
-            ? new Date(exactMatchData.release_date).getFullYear()
-            : 0,
-          type: type,
-        };
-        exactMatchMeta = await toStremioMeta(
-          exactMatchItem,
-          platform,
-          tmdbKey,
-          rpdbKey,
-          rpdbPosterType,
-          language,
-          configData,
-          includeAdult
-        );
-        if (exactMatchMeta) {
-          logger.info("TMDB exact match found and converted to meta", {
-            searchQuery,
-            exactMatchTitle: exactMatchData.title,
-            tmdbId: exactMatchData.tmdb_id,
-            imdbId: exactMatchData.imdb_id,
-          });
+
+      if (matchResult) {
+        tmdbInitialResults = matchResult.results;
+        if (matchResult.isExactMatch) {
+          const normalizedTitle = searchQuery.toLowerCase().trim();
+          const exactMatchData = matchResult.results.find(r => (r.title || r.name || "").toLowerCase().trim() === normalizedTitle);
+          if (exactMatchData) {
+            const details = await getTmdbDetailsByImdbId(exactMatchData.id, type, tmdbKey);
+            if (details && details.imdb_id) {
+              const exactMatchItem = {
+                id: `exact_${exactMatchData.id}`,
+                name: exactMatchData.title || exactMatchData.name,
+                year: (exactMatchData.release_date || exactMatchData.first_air_date || 'N/A').substring(0,4),
+                type: type,
+              };
+            exactMatchMeta = await toStremioMeta(
+              exactMatchItem,
+              platform,
+              tmdbKey,
+              rpdbKey,
+              rpdbPosterType,
+              language,
+              configData,
+              includeAdult
+            );
+            if (exactMatchMeta) {
+              logger.info("TMDB exact match found and converted to meta", {
+                searchQuery,
+                exactMatchTitle: exactMatchMeta.name,
+              });
+            }
+          }
         }
       }
     }
+    logger.info(`Found ${tmdbInitialResults.length} initial TMDB results for context.`, { searchQuery });
+  }
 
     // Now check if it's a recommendation query
     const isRecommendation = isRecommendationQuery(searchQuery);
@@ -3272,6 +3205,16 @@ const catalogHandler = async function (args, req) {
       const genreCriteria = extractGenreCriteria(searchQuery);
       const currentYear = new Date().getFullYear();
 
+      let franchiseInstruction = `your TOP PRIORITY is to list ALL official mainline movies from that franchise, followed by any relevant spin-offs or related content.`;
+
+      if (type === 'series') {
+        franchiseInstruction = `your TOP PRIORITY is to provide a **comprehensive list** of ALL television content related to that franchise. Your search MUST include, but is not limited to:
+        - Official narrative series and mini-series (both live-action and animated).
+        - Documentary series (e.g., 'making of' or historical series like 'Icons Unearthed').
+        - Competition or reality shows (e.g., 'Hogwarts Tournament of Houses', 'Wizards of Baking').
+        - Any related TV specials or one-off televised events.`;
+      }
+
       let promptText = [
         `You are a ${type} recommendation expert. Analyze this query: "${searchQuery}"`,
         "",
@@ -3435,21 +3378,53 @@ const catalogHandler = async function (args, req) {
             "1. Focus on the specific requirements from the query (genres, time period, mood)",
             "2. Use user's preferences to refine choices within those requirements",
             "3. Consider their rating patterns to gauge quality preferences",
-            "4. Prioritize movies with preferred actors/directors when relevant",
+            "4. Prioritize content with preferred actors/directors when relevant",
             "5. Include some variety while staying within the requested criteria",
-            "6. For genre-specific queries, prioritize acclaimed or popular movies in that genre that the user hasn't seen",
+            "6. For genre-specific queries, prioritize acclaimed or popular content in that genre that the user hasn't seen",
             "7. Include a mix of well-known classics and hidden gems in the requested genre",
-            "8. If the user has watched many movies in the requested genre, look for similar but less obvious choices",
+            "8. If the user has watched many content in the requested genre, look for similar but less obvious choices",
             ""
           );
         }
+      }
+
+      if (tmdbInitialResults.length > 0) {
+        const initialTitles = tmdbInitialResults
+          .slice(0, 15)
+          .map(item => `- ${item.title || item.name} (${(item.release_date || item.first_air_date || 'N/A').substring(0, 4)})`)
+          .join('\n');
+
+        promptText.push(
+          "CONTEXT FROM INITIAL DATABASE SEARCH:",
+          "The following is a list of relevant titles found in an initial database search. Your main task is use this as the primary data source, add any official entries that might be missing, add similar titles, sort them by relevance and return the comprehensive list.",
+          "",
+          "Found Titles:",
+          initialTitles,
+          "",
+          "If you are unable to collate ", numResults, " ", type, " recommendations", " add the missing ones from the initial database search results to the end of your recommendations.",
+        );
+      }
+
+      let examplesText;
+      if (type === 'movie') {
+        examplesText = [
+          "EXAMPLES:",
+          "movie|The Matrix|1999",
+          "movie|Inception|2010",
+        ].join('\n');
+      } else {
+        examplesText = [
+          "EXAMPLES:",
+          "series|Breaking Bad|2008",
+          "series|Game of Thrones|2011",
+        ].join('\n');
       }
 
       promptText = promptText.concat([
         "IMPORTANT INSTRUCTIONS:",
         `- Base your recommendations on the most current, publicly available information, especially for queries about new, recent, or future releases.`,
         `- Current year is ${currentYear}. For time-based queries:`,
-        `  * 'past year' means movies from ${
+        `  * 'past year' means content from ${
           currentYear - 1
         } to ${currentYear}`,
         `  * 'recent' means within the last 2-3 years (${
@@ -3459,7 +3434,7 @@ const catalogHandler = async function (args, req) {
         "SPECIFIC QUERY HANDLING:",
         "First, determine if the query matches one of the types below. If it does, follow its rules precisely.",
         "",
-        `1. FRANCHISE/SERIES: If the query is for a specific title that is part of a larger series (e.g., 'Shrek', 'The Matrix Reloaded', 'Harry Potter', 'star wars', 'Jurassic Park') or explicitly asks for a franchise ('James Bond movies'), your TOP PRIORITY is to list ALL official mainline movies from that franchise.`,
+        `1. FRANCHISE/SERIES: If the query is for a specific title that is part of a larger series (e.g., 'Shrek', 'The Matrix Reloaded', 'Harry Potter', 'star wars', 'Jurassic Park') or explicitly asks for a franchise ('James Bond movies'), ${franchiseInstruction}`,
         `   - List them first, in STRICT chronological order of release.`,
         `   - After listing the entire franchise, if you need more results to reach the count of ${numResults}, you may add official spin-offs or highly similar titles.`,
         "",
@@ -3470,26 +3445,29 @@ const catalogHandler = async function (args, req) {
         `3. GENERAL RECOMMENDATIONS: For ALL other queries, provide diverse recommendations that best match the query's theme, genre, and mood.`,
         `   - Order these results by their relevance to the query.`,
         "CRITICAL REQUIREMENTS:",
-        `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`,
-        `- DO NOT recommend any movies that appear in the user's watch history or ratings above.`,
-        `- Recommend movies that are SIMILAR to the user's highly rated movies but NOT THE SAME ones.`,
-        `- You MUST return exactly ${numResults} ${type} recommendations. If you can't find enough perfect matches, broaden your criteria while staying within the genre/theme requirements.`,
-        `- Prioritize quality over exact matching - it's better to recommend a great movie that's somewhat related than a mediocre movie that perfectly matches all criteria.`,
-        `- If the user has watched many movies in the requested genre, consider recommending lesser-known gems, international films, or recent releases they might have missed.`,
+        `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`,]);
+        if (traktData) {
+          promptText.push(
+            `- DO NOT recommend any content that appears in the user's watch history or ratings above.`,
+            `- Recommend content that is SIMILAR to the user's highly rated content but NOT THE SAME ones.`
+          );
+        }
+        promptText = promptText.concat([
+        `- You MUST return upto ${numResults} ${type} recommendations. If you can't find enough perfect matches, broaden your criteria while staying within the genre/theme requirements.`,
+        `- Prioritize quality over exact matching - it's better to recommend a great content that's somewhat related than a mediocre content that perfectly matches all criteria.`,
+        `- If the user has watched many content in the requested genre, consider recommending lesser-known gems, international films, or recent releases they might have missed.`,
         "",
-        "FORMAT:",
-        "type|name|year",
-        "OR",
-        "type|name (year)",
+        "RESPONSE FORMAT: You MUST respond in the following format (without any additional commentary):",
+        "[type]|[name]|[year]",
         "",
-        "EXAMPLES:",
-        `${type}|The Matrix|1999`,
-        `${type}|The Matrix (1999)`,
+        examplesText,
         "",
         "RULES:",
         "- Use | separator",
-        "- Year: YYYY format (either as separate field or in parentheses)",
-        `- Type: Hardcode to "${type}"`,
+        "- Year: YYYY format",
+        `- Type: Accurately label each item as 'movie' or 'series'.`,
+        "- Titles: Provide clean, official titles only. Do NOT add extra text like '(film)', '(documentary)', or other descriptions.",
+        "- Content: ONLY include official, released movies and TV series. Exclude games, books, fan-made content, and stage productions.",
         "- Only best matches that strictly match ALL query requirements",
         "- If specific genres/time periods are requested, ALL recommendations must match those criteria",
       ]);
@@ -4077,13 +4055,7 @@ const metaHandler = async function (args) {
             title: tmdbData.title,
             released: new Date(tmdbData.release_date || '1970-01-01').toISOString(),
             overview: description,
-            thumbnail: landscapeThumbnail,
-            streams: [
-              {
-                title: "View Details",
-                externalUrl: `${stremioUrlPrefix}/detail/${recType}/${tmdbData.imdb_id}`
-              }
-            ]
+            thumbnail: landscapeThumbnail
           };
         }
         return null;
