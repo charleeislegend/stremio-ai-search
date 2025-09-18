@@ -34,22 +34,32 @@ An intelligent search addon for Stremio powered by Google's Gemini AI. Get perso
 
 ## Customizing Your Homepage
 
-One of the most powerful features of this addon is the ability to create your own recommendation rows directly on the Stremio homepage. In the addon configuration, you can provide a comma-separated list of queries in the "Custom Homepage Queries" field.
+One of the most powerful features of this addon is the ability to create your own recommendation rows directly on the Stremio homepage. In the "Custom Homepage Catalogs" field within the addon's advanced settings, you can define multiple, comma-separated catalogs.
 
-Each query in the list will generate one or two new catalogs on your board, depending on whether the query is for movies, series, or both.
+Use a Title:Query format for each entry. This colon-separated, key-value pair approach provides a more structured and intuitive way to define your homepage. The Title serves as the distinct name for your catalog, while the Query is the natural language request for recommendations. This method prevents ambiguity and makes your configuration easier to read and manage.
 
-### Tips for Effective Homepage Queries
+### Tips for Effective Homepage Catalogs
 
--   **Use a Comma-Separated List**: To create multiple rows, separate each query with a comma.
-    -   *Example*: `80s sci-fi movies, new comedy series, recommend thrillers`
+-   **Use a Comma-Separated List**: To create multiple catalogs in your homepage, separate each Title:Query pair with a comma.
+    -   *Example*: `Mystery:recommend mystery thrillers,Sports:recommend sports movies`
+-   **Get Personalized Recommendations**: Start your query with the word recommend to leverage your Trakt.tv watch history and ratings for highly personalized suggestions.
+    -   *Example*: `For You:recommend feel-good movies` will find movies similar to what you've watched and liked on Trakt.
+-   **Find the Latest Content**: Use keywords like new, latest, or recent to discover the most up-to-date movies and shows.
+    -   *Example*: `New Series:new popular series` or `Recent Anime:latest anime movies`
+-   **Be Specific**: The addon is intelligent. If you specify "movies" in your query, it will only create a movie catalog. Similarly, asking for "series" will result in only a series catalog. For ambiguous queries, it will create catalogs for both movies and series.
+    -   *Example*: `Pixar Films:Pixar movies` will create a single "Pixar Films - Movie" catalog.
 
--   **Get Personalized Recommendations**: Start your query with the word `recommend` to use your Trakt.tv watch history (last 100) and ratings (last 100 high & low ratings) for highly personalized suggestions.
-    -   *Example*: `recommend feel-good movies` will find movies similar to what you've watched and liked on Trakt.
+### Example Homepage Configuration
+An example setting in the configuration page could be:
+`Thrillers:recommend mind-bending thrillers,Popular Series:new popular series,A24 Films:best of A24,Anime Classics:90s anime`
 
--   **Find the Latest Content**: Use keywords like `new`, `latest`, or `recent` to find the most up-to-date movies and shows.
-    -   *Example*: `new popular series` or `latest anime movies`.
-
--   **Be Specific**: The addon is smart. If you ask for "anime series," it will only create a Series catalog. If you ask for "Pixar movies," it will only create a Movie catalog. For ambiguous queries like "mystery thriller," it will create one for movies and one for series.
+This configuration would generate the following catalogs on your Stremio homepage:
+- Thrillers - Movie
+- Thrillers - Series
+- Popular Series - Series
+- A24 Films - Movie
+- Anime Classics - Movie
+- Anime Classics - Series
 
 ### Example Homepage Configuration
 

@@ -611,6 +611,17 @@
             </div>
           </div>
 
+          <!-- Enable Similar Recommendations -->
+          <div class="form-group">
+            <div class="checkbox-container">
+              <input type="checkbox" id="enableSimilar" checked />
+              <label for="enableSimilar">Enable 'Similar' Recommendations</label>
+            </div>
+            <div class="help-text">
+              Shows a "Similar movies and shows" link on content detail pages.
+            </div>
+          </div>
+
           <!-- Disable homepage AI recommendations -->
           <div class="form-group">
             <div class="checkbox-container">
@@ -625,11 +636,10 @@
 
           <!-- Custom Homepage Query Input - Initially Hidden -->
           <div class="form-group" id="homepageQueryGroup" style="display: none;">
-              <label class="form-label" for="homepageQuery">Custom Homepage Queries (Optional)</label>
-              <input type="text" id="homepageQuery" placeholder="e.g., recommend mystery, new popular series, anime movies">
+              <label class="form-label" for="homepageQuery">Custom Homepage Catalogs (Optional)</label>
+              <input type="text" id="homepageQuery" placeholder="e.g., Mystery:recommend mystery, Sports:recommend sports movies">
               <div class="help-text">
-                  Enter a comma-separated list of queries. Each query will create its own catalog(s) on your homepage.
-                  <br>Use "<b>recommend</b>" to get personalized Trakt suggestions. Use "<b>new</b>" for the latest content.
+                  Enter a comma-separated list of catalogs in the format <b>Title:Query</b>. Each entry will create a new catalog on your homepage. e.g. `Mystery:recommend mystery thrillers,Sports:recommend sports movies` gives three catalogs titled "Mystery - Movie", "Mystery - Series", and "Sports - Movie". To show only movies for a query, add the word "movies" to it (e.g., `Thriller:thriller movies`). This prevents a series catalog from appearing for that query. To use Trakt recommendations add 'Recommend' keyword in the query (e.g., `Top Rated:recommend top rated movies`). For new content, use 'New' keyword (e.g., `New Releases:new action movies`).
               </div>
           </div>
 
@@ -1123,6 +1133,7 @@
             EnableRpdb: document.getElementById("enableRpdbPosters").checked,
             EnableHomepage: document.getElementById("enableHomepage").checked,
             IncludeAdult: document.getElementById("includeAdult").checked,
+            EnableSimilar: document.getElementById("enableSimilar").checked,
           };
 
           // Add conditional properties
