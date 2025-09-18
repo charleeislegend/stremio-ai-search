@@ -1214,7 +1214,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", in
 
 const manifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.64",
+  version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   resources: [
@@ -4055,13 +4055,7 @@ const metaHandler = async function (args) {
             title: tmdbData.title,
             released: new Date(tmdbData.release_date || '1970-01-01').toISOString(),
             overview: description,
-            thumbnail: landscapeThumbnail,
-            streams: [
-              {
-                title: "View Details",
-                externalUrl: `${stremioUrlPrefix}/detail/${recType}/${tmdbData.imdb_id}`
-              }
-            ]
+            thumbnail: landscapeThumbnail
           };
         }
         return null;

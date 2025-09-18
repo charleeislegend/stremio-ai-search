@@ -308,7 +308,7 @@ const TRAKT_API_BASE = "https://api.trakt.tv";
 
 const setupManifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.64",
+  version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   logo: `${HOST}${BASE_PATH}/logo.png`,
