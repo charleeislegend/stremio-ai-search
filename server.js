@@ -308,7 +308,7 @@ const TRAKT_API_BASE = "https://api.trakt.tv";
 
 const setupManifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.61",
+  version: "1.0.63",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   logo: `${HOST}${BASE_PATH}/logo.png`,
@@ -1487,12 +1487,14 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       TmdbApiKey,
       GeminiModel,
       TraktAccessToken,
+      FanartApiKey,
       traktUsername,
     } = req.body;
     
     const validationResults = {
       gemini: false,
       tmdb: false,
+      fanart: true, // Optional, so default to true
       trakt: true,
       errors: {},
     };
@@ -1551,6 +1553,35 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
     } else {
         validationResults.errors.tmdb = "TMDB API Key is required.";
     }
+
+    // Fanart.tv Validation (Optional)
+    if (FanartApiKey) {
+      validations.push((async () => {
+        try {
+          // Test with a known movie (Harry Potter) to validate the API key
+          const fanartUrl = `http://webservice.fanart.tv/v3/movies/71562?api_key=${FanartApiKey}`;
+          const fanartResponse = await fetch(fanartUrl);
+          if (fanartResponse.ok) {
+            const data = await fanartResponse.json();
+            if (data && (data.moviethumb || data.hdmovielogo || data.movieposter)) {
+              validationResults.fanart = true;
+            } else {
+              validationResults.errors.fanart = "Fanart.tv API key valid but no data returned";
+            }
+          } else if (fanartResponse.status === 401) {
+            validationResults.fanart = false;
+            validationResults.errors.fanart = "Invalid Fanart.tv API key";
+          } else {
+            validationResults.fanart = false;
+            validationResults.errors.fanart = `Fanart.tv API error (Status: ${fanartResponse.status})`;
+          }
+        } catch (error) {
+          validationResults.fanart = false;
+          validationResults.errors.fanart = "Fanart.tv API validation failed";
+        }
+      })());
+    }
+    // Note: Fanart.tv is optional, so no error if missing
 
     // --- NEW TRAKT VALIDATION LOGIC ---
     let tokenToCheck = TraktAccessToken;
