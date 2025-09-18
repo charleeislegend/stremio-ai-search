@@ -308,7 +308,7 @@ const TRAKT_API_BASE = "https://api.trakt.tv";
 
 const setupManifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.63",
+  version: "1.0.64",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   logo: `${HOST}${BASE_PATH}/logo.png`,
@@ -661,7 +661,7 @@ async function startServer() {
             const args = {
               type: req.params.type,
               id: req.params.id,
-              extra: { ...req.params.extra, search: searchQuery },
+              extra: { search: searchQuery },
               config: decryptedConfig,
             };
 
@@ -1559,7 +1559,7 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       validations.push((async () => {
         try {
           // Test with a known movie (Harry Potter) to validate the API key
-          const fanartUrl = `http://webservice.fanart.tv/v3/movies/71562?api_key=${FanartApiKey}`;
+          const fanartUrl = `http://webservice.fanart.tv/v3/movies/120?api_key=${FanartApiKey}`;
           const fanartResponse = await fetch(fanartUrl);
           if (fanartResponse.ok) {
             const data = await fanartResponse.json();
