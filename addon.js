@@ -11,6 +11,7 @@ const TMDB_DISCOVER_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 day cache for
 const AI_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 day cache for AI
 const RPDB_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 day cache for RPDB
 const DEFAULT_RPDB_KEY = process.env.RPDB_API_KEY;
+const DEFAULT_FANART_KEY = process.env.FANART_API_KEY;
 const ENABLE_LOGGING = process.env.ENABLE_LOGGING === "true" || false;
 const TRAKT_API_BASE = "https://api.trakt.tv";
 const TRAKT_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
@@ -169,6 +170,11 @@ const aiRecommendationsCache = new SimpleLRUCache({
 
 const rpdbCache = new SimpleLRUCache({
   max: 25000,
+  ttl: RPDB_CACHE_DURATION,
+});
+
+const fanartCache = new SimpleLRUCache({
+  max: 5000,
   ttl: RPDB_CACHE_DURATION,
 });
 
@@ -618,14 +624,25 @@ async function fetchTraktWatchedAndRated(
   }
 
   const makeApiCall = async (url, headers) => {
-    const response = await fetch(url, { headers });
-
-    if (response.status === 401) {
-      logger.warn(
-        "Trakt access token is expired. Personalized recommendations will be unavailable until the user updates their configuration."
-      );
-    }
-    return response;
+    return await withRetry(
+      async () => {
+        const response = await fetch(url, { headers });
+        
+        if (response.status === 401) {
+          logger.warn(
+            "Trakt access token is expired. Personalized recommendations will be unavailable until the user updates their configuration."
+          );
+        }
+        
+        return response;
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        shouldRetry: (error) => !error.status || (error.status !== 401 && error.status !== 403),
+        operationName: "Trakt API call"
+      }
+    );
   };
 
   const rawCacheKey = `trakt_raw_${accessToken}_${type}`;
@@ -1276,7 +1293,7 @@ async function searchTMDBExactMatch(title, type, tmdbKey, language = "en-US", in
 
 const manifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.0",
+  version: "1.0.63",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   resources: [
@@ -1680,6 +1697,137 @@ function isItemWatchedOrRated(item, watchHistory, ratedItems) {
   return isWatched || isRated;
 }
 
+/**
+ * Fetches the best available landscape thumbnail for recommendations.
+ * Priority: 1) Fanart.tv moviethumb, 2) TMDB backdrop, 3) Fallback to portrait poster
+ */
+async function getLandscapeThumbnail(tmdbData, imdbId, fanartApiKey, tmdbKey) {
+  // 1. Try Fanart.tv first (best quality landscape thumbnails)
+  if (fanartApiKey && imdbId) {
+    try {
+      const fanartThumb = await fetchFanartThumbnail(imdbId, fanartApiKey);
+      if (fanartThumb) {
+        logger.debug("Using Fanart.tv thumbnail", { imdbId, thumbnail: fanartThumb });
+        return fanartThumb;
+      }
+    } catch (error) {
+      logger.debug("Fanart.tv thumbnail fetch failed", { imdbId, error: error.message });
+    }
+  }
+  
+  // 2. Fallback to TMDB backdrop (convert to landscape-optimized size)
+  if (tmdbData.backdrop) {
+    const landscapeBackdrop = tmdbData.backdrop.replace('/original', '/w780');
+    logger.debug("Using TMDB backdrop as thumbnail", { imdbId, thumbnail: landscapeBackdrop });
+    return landscapeBackdrop;
+  }
+  
+  // 3. Final fallback to portrait poster (better than nothing)
+  logger.debug("Using portrait poster as thumbnail fallback", { imdbId, thumbnail: tmdbData.poster });
+  return tmdbData.poster;
+}
+
+/**
+ * Fetches landscape movie thumbnails from Fanart.tv
+ */
+async function fetchFanartThumbnail(imdbId, fanartApiKey) {
+  if (!imdbId) return null;
+  
+  // Use provided key or fall back to default
+  const effectiveFanartKey = fanartApiKey || DEFAULT_FANART_KEY;
+  if (!effectiveFanartKey) {
+    logger.debug("No Fanart.tv API key available", { imdbId });
+    return null;
+  }
+  
+  const cacheKey = `fanart_thumb_${imdbId}`;
+  
+  // Check cache first (using dedicated fanartCache)
+  if (fanartCache.has(cacheKey)) {
+    const cached = fanartCache.get(cacheKey);
+    logger.debug("Fanart thumbnail cache hit", { 
+      imdbId, 
+      cacheKey,
+      cachedAt: new Date(cached.timestamp).toISOString(),
+      age: `${Math.round((Date.now() - cached.timestamp) / 1000)}s`,
+      keyType: fanartApiKey ? "user" : "default"
+    });
+    return cached.data;
+  }
+  
+  logger.debug("Fanart thumbnail cache miss", { 
+    imdbId, 
+    cacheKey,
+    keyType: fanartApiKey ? "user" : "default"
+  });
+  
+  try {
+    // Optional dependency: Try to require fanart.tv package
+    let fanart;
+    try {
+      const FanartApi = require("fanart.tv");
+      fanart = new FanartApi(effectiveFanartKey);
+    } catch (requireError) {
+      logger.debug("Fanart.tv package not installed", { 
+        imdbId, 
+        error: "Package 'fanart.tv' not found. Install with: npm install fanart.tv" 
+      });
+      return null;
+    }
+    
+    logger.info("Making Fanart.tv API call", {
+      imdbId,
+      keyType: fanartApiKey ? "user" : "default",
+      apiKeyPrefix: effectiveFanartKey.substring(0, 4) + "..."
+    });
+    
+    const data = await withRetry(
+      async () => {
+        return await fanart.movies.get(imdbId);
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        shouldRetry: (error) => !error.status || error.status !== 401,
+        operationName: "Fanart.tv API call"
+      }
+    );
+    
+    const thumbnail = data?.moviethumb
+      ?.filter(thumb => thumb.lang === 'en' || !thumb.lang || thumb.lang.trim() === '')
+      ?.sort((a, b) => b.likes - a.likes)[0]?.url;
+    
+    // Cache the result
+    fanartCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: thumbnail
+    });
+    
+    logger.info("Fanart thumbnail API response", { 
+      imdbId, 
+      thumbnail: thumbnail ? "found" : "not_found",
+      url: thumbnail ? thumbnail.substring(0, 50) + "..." : null,
+      keyType: fanartApiKey ? "user" : "default"
+    });
+    
+    return thumbnail;
+  } catch (error) {
+    logger.error("Fanart.tv API error", { 
+      imdbId, 
+      error: error.message,
+      keyType: fanartApiKey ? "user" : "default"
+    });
+    
+    // Cache null result to avoid repeated API calls for non-existent data
+    fanartCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: null
+    });
+    
+    return null;
+  }
+}
+
 async function fetchRpdbPoster(
   imdbId,
   rpdbKey,
@@ -1978,92 +2126,6 @@ function detectPlatform(extra = {}) {
   return "unknown";
 }
 
-// Creative recommendation prompts
-const movieRecommendationPrompts = [
-  "Recommend a hidden gem movie.",
-  "Show me some critically acclaimed films.",
-  "What's a good movie to watch this weekend?",
-  "Recommend a mind-bending thriller movie.",
-  "Find me a feel-good comedy movie.",
-  "Recommend movies that won Best Picture.",
-  "Show me some popular movies from the 90s.",
-  "Recommend an epic fantasy adventure film.",
-  "Recommend a movie with a great twist ending.",
-  "Recommend a visually stunning sci-fi movie.",
-  "Show me a great foreign language film.",
-  "What are some top-rated animated movies for adults?",
-  "Recommend a compelling documentary movie.",
-  "Find a cult classic I might have missed.",
-  "Recommend a gritty neo-noir film.",
-  "Show me the best action-comedies.",
-  "What are some essential 80s movies?",
-  "Recommend a slow-burn horror movie.",
-  "Find an uplifting and inspiring movie based on a true story.",
-  "Show me some great heist movies.",
-  "Recommend an intelligent courtroom drama.",
-  "What's a cinematic masterpiece I should see?",
-  "Recommend a movie with a fantastic original score.",
-  "Find a modern Western film.",
-  "Show me movies with an unreliable narrator.",
-  "Recommend a thought-provoking movie about artificial intelligence.",
-  "Find some great coming-of-age films.",
-  "Show me the best international thrillers.",
-  "Recommend an underrated science fiction movie from the 2000s.",
-  "What's a good movie for a rainy day?",
-  "Find movies that are visually breathtaking.",
-  "Recommend a satirical dark comedy.",
-  "Show me some essential independent films from the last 5 years.",
-  "What are some great space exploration movies?",
-  "Recommend a movie that's a single, continuous shot.",
-  "Find a movie that will make me think for days.",
-  "Show me a great war movie that isn't about WWII.",
-  "Recommend a high-concept sci-fi film.",
-  "Find a charming romantic comedy that isn't cheesy.",
-];
-
-const seriesRecommendationPrompts = [
-  "Recommend a binge-worthy series.",
-  "Show me a limited series with a satisfying ending.",
-  "What's a great TV show to start now?",
-  "Recommend a gripping crime drama series.",
-  "Find me a lighthearted and funny sitcom.",
-  "Recommend a TV show with amazing world-building.",
-  "Show me a popular series from the last decade.",
-  "Recommend an epic historical drama series.",
-  "Recommend a series with a strong ensemble cast.",
-  "Find a great animated series for adults.",
-  "Show me a thought-provoking science fiction series.",
-  "Recommend a high-quality reality TV show.",
-  "What are some of the best fantasy TV series?",
-  "Recommend a compelling documentary series.",
-  "Find a cozy and comforting show to watch.",
-  "Recommend a sharp and witty political satire.",
-  "Show me a great series I can finish in a weekend.",
-  "What's a classic TV show that still holds up?",
-  "Recommend a series with a brilliant anti-hero.",
-  "Find an excellent workplace comedy.",
-  "Show me some top-tier British crime shows.",
-  "Recommend a supernatural teen drama.",
-  "Find a TV show with a unique premise.",
-  "What are the best Scandinavian noir series?",
-  "Recommend a mockumentary-style comedy.",
-  "Show me a high-stakes espionage thriller series.",
-  "Find a critically acclaimed anthology series.",
-  "Recommend a series with strong female leads.",
-  "What's a good 'monster of the week' show?",
-  "Find a period drama with modern sensibilities.",
-  "Show me an epic, long-running series to get lost in.",
-  "Recommend a family saga TV show.",
-  "Find a procedural drama that breaks the mold.",
-  "What's a great K-Drama for beginners?",
-  "Recommend a series that's a slow burn but worth it.",
-  "Show me a series that everyone was talking about last year.",
-  "Find a show that's perfect for background watching.",
-  "Recommend a great medical drama.",
-  "What are some mind-bending shows about time travel?",
-  "Show me a great animated show for the whole family.",
-];
-
 async function getTmdbDetailsByImdbId(imdbId, type, tmdbKey, language = "en-US") {
   const cacheKey = `details_imdb_${imdbId}_${type}_${language}`;
   if (tmdbDetailsCache.has(cacheKey)) {
@@ -2267,6 +2329,13 @@ function clearRpdbCache() {
   return { cleared: true, previousSize: size };
 }
 
+function clearFanartCache() {
+  const size = fanartCache.size;
+  fanartCache.clear();
+  logger.info("Fanart.tv cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
 function clearTraktCache() {
   const size = traktCache.size;
   traktCache.clear();
@@ -2285,6 +2354,13 @@ function clearQueryAnalysisCache() {
   const size = queryAnalysisCache.size;
   queryAnalysisCache.clear();
   logger.info("Query analysis cache cleared", { previousSize: size });
+  return { cleared: true, previousSize: size };
+}
+
+function clearSimilarContentCache() {
+  const size = similarContentCache.size;
+  similarContentCache.clear();
+  logger.info("Similar content cache cleared", { previousSize: size });
   return { cleared: true, previousSize: size };
 }
 
@@ -2324,6 +2400,12 @@ function getCacheStats() {
       usagePercentage:
         ((rpdbCache.size / rpdbCache.max) * 100).toFixed(2) + "%",
     },
+    fanartCache: {
+      size: fanartCache.size,
+      maxSize: fanartCache.max,
+      usagePercentage:
+        ((fanartCache.size / fanartCache.max) * 100).toFixed(2) + "%",
+    },
     traktCache: {
       size: traktCache.size,
       maxSize: traktCache.max,
@@ -2361,6 +2443,7 @@ function serializeAllCaches() {
     tmdbDiscoverCache: tmdbDiscoverCache.serialize(),
     aiRecommendationsCache: aiRecommendationsCache.serialize(),
     rpdbCache: rpdbCache.serialize(),
+    fanartCache: fanartCache.serialize(),
     traktCache: traktCache.serialize(),
     traktRawDataCache: traktRawDataCache.serialize(),
     queryAnalysisCache: queryAnalysisCache.serialize(),
@@ -2403,6 +2486,10 @@ function deserializeAllCaches(data) {
 
   if (data.rpdbCache) {
     results.rpdbCache = rpdbCache.deserialize(data.rpdbCache);
+  }
+
+  if (data.fanartCache) {
+    results.fanartCache = fanartCache.deserialize(data.fanartCache);
   }
 
   if (data.traktCache) {
@@ -2737,14 +2824,25 @@ const catalogHandler = async function (args, req) {
     if (!searchQuery) {
       if (id.startsWith("aisearch.home.")) {
         isHomepageQuery = true;
-        const customHomepageQuery = configData.HomepageQuery;
-        const idParts = id.split("."); // e.g., ['aisearch', 'home', '0', 'movie']
+        let homepageQueries = configData.HomepageQuery;
+
+        if (!homepageQueries || homepageQueries.trim() === '') {
+            homepageQueries = "AI Recommendations:recommend a hidden gem movie, AI Recommendations:recommend a binge-worthy series";
+        }
+
+        const idParts = id.split(".");
         
-        if (idParts.length === 4 && customHomepageQuery) {
+        if (idParts.length === 4 && homepageQueries) {
           const queryIndex = parseInt(idParts[2], 10);
-          const queries = customHomepageQuery.split(",").map(q => q.trim());
-          if (!isNaN(queryIndex) && queries[queryIndex]) {
-            searchQuery = queries[queryIndex];
+          const catalogEntries = homepageQueries.split(",").map(q => q.trim());
+          if (!isNaN(queryIndex) && catalogEntries[queryIndex]) {
+            const entry = catalogEntries[queryIndex];
+            const parts = entry.split(/:(.*)/s);
+            if (parts.length > 1 && parts[1].trim()) {
+                searchQuery = parts[1].trim();
+            } else {
+                searchQuery = entry;
+            }
             logger.info("Using custom homepage query from list", { type, query: searchQuery, index: queryIndex });
           }
         }
@@ -3825,6 +3923,24 @@ const catalogHandler = async function (args, req) {
 };
 
 const streamHandler = async (args, req) => {
+
+  const { config } = args;
+  if (config) {
+    try {
+      const decryptedConfigStr = decryptConfig(config);
+      if (decryptedConfigStr) {
+        const configData = JSON.parse(decryptedConfigStr);
+        const enableSimilar = configData.EnableSimilar !== undefined ? configData.EnableSimilar : true;
+        if (!enableSimilar) {
+          logger.info("'Similar' recommendations are disabled by user configuration.", { id: args.id });
+          return Promise.resolve({ streams: [] });
+        }
+      }
+    } catch (error) {
+        logger.error("Failed to read 'EnableSimilar' config in streamHandler, defaulting to enabled.", { error: error.message });
+    }
+  }
+
   logger.info("Stream request received, creating AI Recommendations link.", { id: args.id, type: args.type });
   const isWeb = req.headers["origin"]?.includes("web.stremio.com");
   const stremioUrlPrefix = isWeb ? "https://web.stremio.com/#" : "stremio://";
@@ -3856,9 +3972,25 @@ const metaHandler = async function (args) {
         throw new Error("Failed to decrypt config data in metaHandler");
       }
       const configData = JSON.parse(decryptedConfigStr);
-      const { GeminiApiKey, TmdbApiKey, GeminiModel, NumResults, RpdbApiKey, RpdbPosterType, TmdbLanguage } = configData;
+      const { GeminiApiKey, TmdbApiKey, GeminiModel, NumResults, RpdbApiKey, RpdbPosterType, TmdbLanguage, FanartApiKey } = configData;
 
       const originalId = id.split(':')[1];
+      
+      // Check similar content cache first
+      const cacheKey = `similar_${originalId}_${type}_${NumResults || 15}`;
+      const cached = similarContentCache.get(cacheKey);
+      if (cached) {
+        logger.debug("Similar content cache hit", { 
+          originalId, 
+          type, 
+          cacheKey,
+          cachedAt: new Date(cached.timestamp).toISOString(),
+          age: `${Math.round((Date.now() - cached.timestamp) / 1000)}s`
+        });
+        return { meta: cached.data };
+      }
+      
+      logger.debug("Similar content cache miss", { originalId, type, cacheKey });
       let sourceDetails = await getTmdbDetailsByImdbId(originalId, type, TmdbApiKey);
       
       if (!sourceDetails) {
@@ -3907,7 +4039,19 @@ const metaHandler = async function (args) {
 
       const genAI = new GoogleGenerativeAI(GeminiApiKey);
       const model = genAI.getGenerativeModel({ model: GeminiModel || DEFAULT_GEMINI_MODEL });
-      const aiResult = await model.generateContent(promptText);
+      
+      const aiResult = await withRetry(
+        async () => {
+          return await model.generateContent(promptText);
+        },
+        {
+          maxRetries: 3,
+          baseDelay: 1000,
+          shouldRetry: (error) => !error.status || error.status !== 400,
+          operationName: "Gemini API call (similar content)"
+        }
+      );
+      
       const responseText = aiResult.response.text().trim();
       const lines = responseText.split('\n').map(line => line.trim()).filter(Boolean);
 
@@ -3925,12 +4069,15 @@ const metaHandler = async function (args) {
             description = `${ratingText}\n\n${description}`;
           }
 
+          // Get landscape thumbnail instead of portrait poster
+          const landscapeThumbnail = await getLandscapeThumbnail(tmdbData, tmdbData.imdb_id, FanartApiKey, TmdbApiKey);
+
           return {
             id: tmdbData.imdb_id,
             title: tmdbData.title,
             released: new Date(tmdbData.release_date || '1970-01-01').toISOString(),
             overview: description,
-            thumbnail: tmdbData.poster,
+            thumbnail: landscapeThumbnail,
             streams: [
               {
                 title: "View Details",
@@ -3954,7 +4101,25 @@ const metaHandler = async function (args) {
         videos: videos,
       };
 
-      logger.info(`Successfully generated ${videos.length} recommendations.`, { source: sourceTitle, duration: Date.now() - startTime });
+      // Only cache if we have valid recommendations
+      if (videos.length > 0) {
+        similarContentCache.set(cacheKey, {
+          timestamp: Date.now(),
+          data: meta
+        });
+
+        logger.info(`Successfully generated ${videos.length} recommendations.`, { 
+          source: sourceTitle, 
+          duration: Date.now() - startTime,
+          cached: true
+        });
+      } else {
+        logger.warn(`No valid recommendations generated for similar content`, { 
+          source: sourceTitle, 
+          duration: Date.now() - startTime,
+          cached: false
+        });
+      }
       return { meta };
     }
   } catch (error) {
@@ -3985,9 +4150,11 @@ module.exports = {
   removeAiCacheByKeywords,
   purgeEmptyAiCacheEntries,
   clearRpdbCache,
+  clearFanartCache,
   clearTraktCache,
   clearTraktRawDataCache,
   clearQueryAnalysisCache,
+  clearSimilarContentCache,
   getCacheStats,
   serializeAllCaches,
   deserializeAllCaches,

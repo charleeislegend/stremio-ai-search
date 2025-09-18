@@ -308,7 +308,7 @@ const TRAKT_API_BASE = "https://api.trakt.tv";
 
 const setupManifest = {
   id: "au.itcon.aisearch",
-  version: "1.0.0",
+  version: "1.0.63",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
   logo: `${HOST}${BASE_PATH}/logo.png`,
@@ -537,16 +537,28 @@ async function startServer() {
               try {
                 const configData = JSON.parse(decryptedConfigStr);
                 const enableHomepage = configData.EnableHomepage !== undefined ? configData.EnableHomepage : true;
-                const homepageQueries = configData.HomepageQuery;
+                let homepageQueries = configData.HomepageQuery;
 
-                if (enableHomepage && homepageQueries && typeof homepageQueries === 'string') {
-                    const queries = homepageQueries.split(',').map(q => q.trim()).filter(Boolean);
+                if (enableHomepage) {
+                    if (!homepageQueries || homepageQueries.trim() === '') {
+                        homepageQueries = "AI Recommendations:recommend a hidden gem movie, AI Recommendations:recommend a binge-worthy series";
+                    }
+                    const catalogEntries = homepageQueries.split(',').map(q => q.trim()).filter(Boolean);
                     const homepageCatalogs = [];
 
-                    queries.forEach((query, index) => {
+                    catalogEntries.forEach((entry, index) => {
+                        let title = entry;
+                        let query = entry;
+                        
+                        const parts = entry.split(/:(.*)/s);
+                        if (parts.length > 1 && parts[0].trim() && parts[1].trim()) {
+                            title = parts[0].trim();
+                            query = parts[1].trim();
+                        }
+
                         const intent = determineIntentFromKeywords(query);
                         const id_prefix = `aisearch.home.${index}`;
-                        const name = query.charAt(0).toUpperCase() + query.slice(1);
+                        const name = title;
 
                         if (intent === 'movie' || intent === 'ambiguous') {
                             homepageCatalogs.push({
@@ -1382,7 +1394,6 @@ async function startServer() {
             traktAuthData.refreshToken,
             traktAuthData.expiresIn
           );
-          // Add the username to the config that will be encrypted
           configData.traktUsername = traktAuthData.username;
         }
 
@@ -1476,12 +1487,14 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       TmdbApiKey,
       GeminiModel,
       TraktAccessToken,
+      FanartApiKey,
       traktUsername,
     } = req.body;
     
     const validationResults = {
       gemini: false,
       tmdb: false,
+      fanart: true, // Optional, so default to true
       trakt: true,
       errors: {},
     };
@@ -1540,6 +1553,35 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
     } else {
         validationResults.errors.tmdb = "TMDB API Key is required.";
     }
+
+    // Fanart.tv Validation (Optional)
+    if (FanartApiKey) {
+      validations.push((async () => {
+        try {
+          // Test with a known movie (Harry Potter) to validate the API key
+          const fanartUrl = `http://webservice.fanart.tv/v3/movies/71562?api_key=${FanartApiKey}`;
+          const fanartResponse = await fetch(fanartUrl);
+          if (fanartResponse.ok) {
+            const data = await fanartResponse.json();
+            if (data && (data.moviethumb || data.hdmovielogo || data.movieposter)) {
+              validationResults.fanart = true;
+            } else {
+              validationResults.errors.fanart = "Fanart.tv API key valid but no data returned";
+            }
+          } else if (fanartResponse.status === 401) {
+            validationResults.fanart = false;
+            validationResults.errors.fanart = "Invalid Fanart.tv API key";
+          } else {
+            validationResults.fanart = false;
+            validationResults.errors.fanart = `Fanart.tv API error (Status: ${fanartResponse.status})`;
+          }
+        } catch (error) {
+          validationResults.fanart = false;
+          validationResults.errors.fanart = "Fanart.tv API validation failed";
+        }
+      })());
+    }
+    // Note: Fanart.tv is optional, so no error if missing
 
     // --- NEW TRAKT VALIDATION LOGIC ---
     let tokenToCheck = TraktAccessToken;
