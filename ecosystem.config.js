@@ -10,7 +10,7 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 7000,
       },
-      max_memory_restart: "999M", // Restart if memory exceeds 300MB
+      max_memory_restart: "1999M",
       instances: 1, // Changed to 1 instance to avoid port conflicts
       exec_mode: "fork", // Changed to fork mode
       log_date_format: "YYYY-MM-DD HH:mm:ss [Australia/Melbourne]",
