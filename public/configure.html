@@ -932,8 +932,20 @@
             </div>
           </div>
 
+          <div class="form-group" id="geminiGroundingGroup">
+            <div class="checkbox-group">
+              <input type="checkbox" id="enableGeminiGrounding" />
+              <label for="enableGeminiGrounding"
+                >Enable Google Search Grounding</label
+              >
+            </div>
+            <div class="help-text">
+              Lets Gemini ground its responses with live Google Search results for more accurate recommendations.
+              <strong>Note:</strong> Free-tier accounts are limited to 20 grounded requests/day. Disable if you hit quota errors.
+            </div>
+          </div>
+
           <div class="form-group">
-            <label class="form-label" for="numResults"
               >Number of AI Recommendations (Max: 30)</label
             >
             <input
@@ -1306,6 +1318,7 @@
           if (aiProvider === "gemini") {
             configData.GeminiApiKey = geminiKey;
             configData.GeminiModel = document.getElementById("geminiModel").value;
+            configData.EnableGeminiGrounding = document.getElementById("enableGeminiGrounding").checked;
           } else {
             configData.OpenAICompatApiKey = openaiCompatApiKey;
             configData.OpenAICompatModel = openaiCompatModel;
@@ -1687,6 +1700,9 @@
               if (config.GeminiModel)
                 document.getElementById("geminiModel").value =
                   config.GeminiModel;
+              if (config.EnableGeminiGrounding !== undefined)
+                document.getElementById("enableGeminiGrounding").checked =
+                  config.EnableGeminiGrounding;
               if (config.EnableRpdb !== undefined) {
                 document.getElementById("enableRpdbPosters").checked =
                   config.EnableRpdb;

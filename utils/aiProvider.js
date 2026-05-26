@@ -131,6 +131,7 @@ function getAiProviderConfigFromConfig(configData = {}) {
       apiKey: (configData.GeminiApiKey || "").trim(),
       model: (configData.GeminiModel || DEFAULT_GEMINI_MODEL).trim(),
       temperature,
+      enableGrounding: configData.EnableGeminiGrounding === true,
     };
   }
 
@@ -157,6 +158,7 @@ function getAiProviderConfigFromConfig(configData = {}) {
     apiKey: (configData.GeminiApiKey || "").trim(),
     model: (configData.GeminiModel || DEFAULT_GEMINI_MODEL).trim(),
     temperature,
+    enableGrounding: configData.EnableGeminiGrounding === true,
   };
 }
 
@@ -180,7 +182,7 @@ function createAiTextGenerator(aiProviderConfig) {
                 ? aiProviderConfig.temperature
                 : 0.2,
           },
-          tools: [{ googleSearch: {} }],
+          ...(aiProviderConfig.enableGrounding ? { tools: [{ googleSearch: {} }] } : {}),
         });
         const aiResult = await model.generateContent(prompt);
         return aiResult.response.text().trim();
