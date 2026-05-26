@@ -3961,11 +3961,13 @@ const streamHandler = async (args, req) => {
   }
 
   logger.info("Stream request received, creating AI Recommendations link.", { id: args.id, type: args.type });
+  const isWeb = req.headers["origin"]?.includes("web.stremio.com");
+  const stremioUrlPrefix = isWeb ? "https://web.stremio.com/#" : "stremio://";
 
   const stream = {
     name: "✨ AI Search",
     description: "Similar movies and shows.",
-    externalUrl: `stremio://detail/${args.type}/ai-recs:${args.id}`,
+    externalUrl: `${stremioUrlPrefix}/detail/${args.type}/ai-recs:${args.id}`,
     behaviorHints: {
       notWebReady: true,
     },
