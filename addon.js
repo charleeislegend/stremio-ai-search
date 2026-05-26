@@ -3121,10 +3121,7 @@ const catalogHandler = async function (args, req) {
             responseText: text
           });
           const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
-          return { metas: [errorMeta] };
-        }
-
-        const metaPromises = selectedRecommendations.map((item) =>
+          return { metas: [] };((item) =>
           toStremioMeta(
             item,
             platform,
@@ -3171,7 +3168,7 @@ const catalogHandler = async function (args, req) {
         if (finalMetas.length === 0) {
             logger.error("No results found for query (from cache)", { query: searchQuery, type: type });
             const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
-            return { metas: [errorMeta] };
+            return { metas: [] };
         }
 
         // Increment counter for successful cached results
@@ -3872,7 +3869,7 @@ const catalogHandler = async function (args, req) {
       if (finalMetas.length === 0) {
           logger.error("No results found for query (from live API call)", { query: searchQuery, type: type });
           const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
-          return { metas: [errorMeta] };
+          return { metas: [] };
       }
 
       // Only increment the counter if we're returning non-empty results
