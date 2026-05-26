@@ -796,22 +796,24 @@
 
           <div class="form-group">
             <label class="form-label">Trakt.tv Integration</label>
-            <button
-              id="traktAuthBtn"
-              class="secondary-button"
-              onclick="authenticateTrakt()"
-              style="margin-bottom: 10px"
-            >
-              Login with Trakt.tv
-            </button>
-            <button
-              id="traktDisconnectBtn"
-              class="secondary-button"
-              onclick="disconnectTrakt()"
-              style="margin-bottom: 10px; margin-left: 8px; background-color: #8b0000; display: none;"
-            >
-              Disconnect Trakt
-            </button>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+              <button
+                id="traktAuthBtn"
+                class="secondary-button"
+                onclick="authenticateTrakt()"
+                style="margin-bottom: 0;"
+              >
+                Login with Trakt.tv
+              </button>
+              <button
+                id="traktDisconnectBtn"
+                class="secondary-button"
+                onclick="disconnectTrakt()"
+                style="margin-bottom: 0; padding: 4px 10px; font-size: 0.78em; background-color: #8b0000; display: none;"
+              >
+                Disconnect
+              </button>
+            </div>
             <input
               type="hidden"
               id="traktAccessToken"
