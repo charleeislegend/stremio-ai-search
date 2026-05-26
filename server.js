@@ -852,7 +852,10 @@ async function startServer() {
           );
 
           if (!tokenResponse.ok) {
-            throw new Error("Failed to exchange code for token");
+            const errBody = await tokenResponse.text().catch(() => "");
+            throw new Error(
+              `Failed to exchange code for token (HTTP ${tokenResponse.status})${errBody ? `: ${errBody}` : ""}`
+            );
           }
 
           const tokenData = await tokenResponse.json();
