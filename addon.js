@@ -3995,10 +3995,32 @@ const metaHandler = async function (args) {
       const aiProviderConfig = getAiProviderConfigFromConfig(configData);
       const aiClient = createAiTextGenerator(aiProviderConfig);
 
+      // Try to fetch Trakt data for personalization (silently skip on any error)
+      let traktData = null;
+      if (DEFAULT_TRAKT_CLIENT_ID && configData.TraktAccessToken) {
+        try {
+          traktData = await fetchTraktWatchedAndRated(
+            DEFAULT_TRAKT_CLIENT_ID,
+            configData.TraktAccessToken,
+            type === 'movie' ? 'movies' : 'shows',
+            configData
+          );
+          if (traktData) {
+            logger.info("Trakt data loaded for similar content personalization", {
+              watchedCount: traktData.watched?.length || 0,
+              ratedCount: traktData.rated?.length || 0,
+            });
+          }
+        } catch (traktError) {
+          logger.warn("Trakt fetch failed for similar content, skipping personalization", { error: traktError.message });
+        }
+      }
+
       const originalId = id.split(':')[1];
       
-      // Check similar content cache first
+      // Check similar content cache first (skip when Trakt active — results are personalized)
       const cacheKey = `similar_${originalId}_${type}_${NumResults || 15}`;
+      if (!traktData) {
       const cached = similarContentCache.get(cacheKey);
       if (cached) {
         logger.debug("Similar content cache hit", { 
@@ -4010,6 +4032,7 @@ const metaHandler = async function (args) {
         });
         return { meta: cached.data };
       }
+      } // end !traktData cache check
       
       logger.debug("Similar content cache miss", { originalId, type, cacheKey });
       let sourceDetails = await getTmdbDetailsByImdbId(originalId, type, TmdbApiKey);
@@ -4045,6 +4068,13 @@ const metaHandler = async function (args) {
       **CRITICAL RULES:**
       1.  **Exclusion:** You **MUST NOT** include the original item, "${sourceTitle} (${sourceYear})", in your list.
       2.  **Final Output:** Provide **ONLY** the combined list of recommendations. Do not include any headers (like "PART 1"), introductory text, or explanations.
+      ${traktData ? `
+      **PERSONALIZATION — ALREADY WATCHED (DO NOT include any of these in your recommendations):**
+      ${(traktData.watched || []).slice(0, 100).map(item => { const m = item.movie || item.show; return m ? `- ${m.title} (${m.year})` : null; }).filter(Boolean).join('\n') || 'None'}
+
+      **PERSONALIZATION — DISLIKED CONTENT (the user rated these poorly; avoid recommending anything similar in tone, style, or genre):**
+      ${(traktData.rated || []).filter(item => item.rating <= 2).slice(0, 20).map(item => { const m = item.movie || item.show; return m ? `- ${m.title} (${m.year})` : null; }).filter(Boolean).join('\n') || 'None'}
+      ` : ''}
 
       **Format:**
       Your response must be a list of pipe-separated values, with each entry on a new line:
@@ -4117,8 +4147,8 @@ const metaHandler = async function (args) {
         videos: videos,
       };
 
-      // Only cache if we have valid recommendations
-      if (videos.length > 0) {
+      // Only cache if we have valid recommendations and no Trakt personalization
+      if (videos.length > 0 && !traktData) {
         similarContentCache.set(cacheKey, {
           timestamp: Date.now(),
           data: meta
