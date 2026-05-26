@@ -263,7 +263,13 @@ async function refreshTraktToken(username, refreshToken) {
   try {
     const response = await fetch("https://api.trakt.tv/oauth/token", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "StremioAISearch/1.0 (https://github.com/itcon-pty-au/stremio-ai-search)",
+        "trakt-api-version": "2",
+        "trakt-api-key": process.env.TRAKT_CLIENT_ID,
+      },
       body: JSON.stringify({
         refresh_token: refreshToken,
         client_id: process.env.TRAKT_CLIENT_ID,
@@ -840,6 +846,10 @@ async function startServer() {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "StremioAISearch/1.0 (https://github.com/itcon-pty-au/stremio-ai-search)",
+                "trakt-api-version": "2",
+                "trakt-api-key": TRAKT_CLIENT_ID,
               },
               body: JSON.stringify({
                 code,
@@ -1368,6 +1378,10 @@ async function startServer() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              "Accept": "application/json",
+              "User-Agent": "StremioAISearch/1.0 (https://github.com/itcon-pty-au/stremio-ai-search)",
+              "trakt-api-version": "2",
+              "trakt-api-key": TRAKT_CLIENT_ID,
             },
             body: JSON.stringify({
               refresh_token,
