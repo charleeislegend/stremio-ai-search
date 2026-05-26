@@ -3121,7 +3121,10 @@ const catalogHandler = async function (args, req) {
             responseText: text
           });
           const errorMeta = createErrorMeta('No Results Found', 'The AI could not find any recommendations for your query. Please try rephrasing your search.');
-          return { metas: [] };((item) =>
+          return { metas: [] };
+        }
+
+        const metaPromises = selectedRecommendations.map((item) =>
           toStremioMeta(
             item,
             platform,
