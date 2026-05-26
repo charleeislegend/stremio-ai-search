@@ -3456,6 +3456,12 @@ const catalogHandler = async function (args, req) {
         `   - Order these results by their relevance to the query.`,
         "CRITICAL REQUIREMENTS:",
         `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`,]);
+        if (isHomepageQuery) {
+          const rotationBucket = Math.floor(Math.random() * 50) + 1;
+          promptText.push(
+            `- VARIETY REQUIREMENT: This is a homepage recommendation shown repeatedly to the user. You MUST provide a fresh, diverse selection. Rotation key: ${rotationBucket}. Do NOT default to the same well-known titles you would typically recommend first — explore the full spectrum of excellent ${type}s matching this query, including lesser-known gems, international titles, and titles from different eras.`
+          );
+        }
         if (traktData) {
           promptText.push(
             `- DO NOT recommend any content that appears in the user's watch history or ratings above.`,
