@@ -1422,7 +1422,11 @@
 
           // Show optional API key validation warnings (but don't block submission)
           const warnings = [];
-          
+
+          if (result.warnings && result.warnings.ai) {
+            warnings.push("AI API: " + result.warnings.ai);
+          }
+
           if (fanartKey && !result.fanart) {
             warnings.push("Fanart.tv: " + result.errors.fanart);
           }

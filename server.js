@@ -1565,7 +1565,23 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
             validationResults.errors.ai = "Invalid AI provider API key - No response";
           }
         } catch (error) {
-          validationResults.errors.ai = `Invalid AI provider API key: ${error.message}`;
+          const isQuotaError =
+            error.status === 429 ||
+            (error.message && error.message.includes("429")) ||
+            (error.message && /quota|rate.?limit/i.test(error.message));
+          if (isQuotaError) {
+            // 429 means the key IS valid — just rate limited. Don't block installation.
+            validationResults.ai = true;
+            if (aiProviderConfig.provider === "gemini") {
+              validationResults.gemini = true;
+            } else {
+              validationResults.openaiCompat = true;
+            }
+            validationResults.warnings = validationResults.warnings || {};
+            validationResults.warnings.ai = "API key is valid but the quota is currently exceeded. The addon will work once the rate limit resets.";
+          } else {
+            validationResults.errors.ai = `Invalid AI provider API key: ${error.message}`;
+          }
         }
       })());
     } else {
