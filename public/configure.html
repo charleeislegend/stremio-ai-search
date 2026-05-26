@@ -804,6 +804,14 @@
             >
               Login with Trakt.tv
             </button>
+            <button
+              id="traktDisconnectBtn"
+              class="secondary-button"
+              onclick="disconnectTrakt()"
+              style="margin-bottom: 10px; margin-left: 8px; background-color: #8b0000; display: none;"
+            >
+              Disconnect Trakt
+            </button>
             <input
               type="hidden"
               id="traktAccessToken"
@@ -1833,7 +1841,8 @@ window.addEventListener("message", async function (event) {
             updateTraktStatus(
               `Connected as ${username}`,
               "#2a5a2a", // Green color for success
-              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon' below to save.`
+              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon' below to save.`,
+              true
             );
           } catch (error) {
             console.error("Trakt user fetch error:", error);
@@ -1854,7 +1863,8 @@ window.addEventListener("message", async function (event) {
             updateTraktStatus(
                 `Connected as ${existingUsername}`,
                 "#2a5a2a", // Green color
-                `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`
+                `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`,
+                true
             );
             return;
         }
@@ -1869,11 +1879,12 @@ window.addEventListener("message", async function (event) {
         }
       }
 
-      function updateTraktStatus(buttonText, buttonColor, helpText) {
+      function updateTraktStatus(buttonText, buttonColor, helpText, connected = false) {
         const traktAuthBtn = document.getElementById("traktAuthBtn");
         const traktHelpText = document.querySelector(
           ".form-group:has(#traktAuthBtn) .help-text"
         );
+        const traktDisconnectBtn = document.getElementById("traktDisconnectBtn");
 
         if (traktAuthBtn) {
           traktAuthBtn.textContent = buttonText;
@@ -1883,6 +1894,23 @@ window.addEventListener("message", async function (event) {
         if (traktHelpText) {
           traktHelpText.innerHTML = helpText;
         }
+
+        if (traktDisconnectBtn) {
+          traktDisconnectBtn.style.display = connected ? "inline-block" : "none";
+        }
+      }
+
+      function disconnectTrakt() {
+        document.getElementById("traktAccessToken").value = "";
+        document.getElementById("traktRefreshToken").value = "";
+        document.getElementById("traktUsername").value = "";
+        document.getElementById("traktExpiresIn").value = "";
+        updateTraktStatus(
+          "Login with Trakt.tv",
+          "#2a2a2a",
+          "Connect your Trakt.tv account to get personalized movie recommendations based on your watch history and ratings.<br><small>Note: You'll need to re-authenticate every 90 days for security reasons.</small>",
+          false
+        );
       }
 
       async function authenticateTrakt() {
