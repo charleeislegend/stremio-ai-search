@@ -1771,6 +1771,17 @@ window.addEventListener("message", async function (event) {
         if (event.origin !== window.location.origin) return;
 
         if (event.data.type === "TRAKT_AUTH_SUCCESS") {
+          const expectedState = sessionStorage.getItem("traktOAuthState");
+          if (!expectedState || event.data.state !== expectedState) {
+            console.error("OAuth state mismatch - possible CSRF attempt");
+            updateTraktStatus(
+              "Authentication Error",
+              "#e74c3c",
+              "Security check failed. Please try again."
+            );
+            return;
+          }
+          sessionStorage.removeItem("traktOAuthState");
           const { access_token, refresh_token, expires_in } = event.data;
           
           updateTraktStatus("Fetching user...", "#666", "Getting your Trakt.tv profile...");
@@ -1876,7 +1887,7 @@ window.addEventListener("message", async function (event) {
         };
         sessionStorage.setItem("formData", JSON.stringify(formData));
 
-        const redirectUri = `${window.location.origin}/aisearch/oauth/callback`;
+        const redirectUri = `https://${HOST}/aisearch/oauth/callback`;
         const state = Math.random().toString(36).substring(7);
         sessionStorage.setItem("traktOAuthState", state);
 

@@ -872,7 +872,8 @@ async function startServer() {
                       type: "TRAKT_AUTH_SUCCESS",
                       access_token: "${tokenData.access_token}",
                       refresh_token: "${tokenData.refresh_token}",
-                      expires_in: ${tokenData.expires_in}
+                      expires_in: ${tokenData.expires_in},
+                      state: "${(state || "").replace(/"/g, "")}"
                     }, "${HOST}");
                     window.close();
                   }
@@ -885,7 +886,17 @@ async function startServer() {
             error: error.message,
             stack: error.stack,
           });
-          res.status(500).send("Error during OAuth callback");
+          const safeMessage = (error.message || "Unknown error").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          res.status(500).send(`
+            <html>
+              <body style="background: #141414; color: #d9d9d9; font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+                <h2 style="color: #e74c3c;">Authentication Failed</h2>
+                <p style="color: #aaa; font-size: 14px;">Could not complete Trakt.tv authentication.</p>
+                <pre style="background: #1f1f1f; color: #f39c12; padding: 12px; border-radius: 6px; font-size: 12px; text-align: left; white-space: pre-wrap; word-break: break-word;">${safeMessage}</pre>
+                <button onclick="window.close()" style="margin-top: 16px; padding: 8px 20px; background: #666; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+              </body>
+            </html>
+          `);
         }
       });
 
