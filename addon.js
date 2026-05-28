@@ -3444,6 +3444,9 @@ const catalogHandler = async function (args, req) {
         "SPECIFIC QUERY HANDLING:",
         "First, determine if the query matches one of the types below. If it does, follow its rules precisely.",
         "",
+        `0. EXACT TITLE LOOKUP: If the query appears to be the specific name of a single movie or TV show (e.g., 'Inception', 'The Godfather', 'Breaking Bad', 'Parasite') — rather than a genre, mood, theme, or person — you MUST include that exact title as the FIRST result, regardless of your quality judgment. After the exact title, fill the remaining slots with closely related or similar content.`,
+        `   - The user searched for this title directly; omitting it is always wrong.`,
+        "",
         `1. FRANCHISE/SERIES: If the query is for a specific title that is part of a larger series (e.g., 'Shrek', 'The Matrix Reloaded', 'Harry Potter', 'star wars', 'Jurassic Park') or explicitly asks for a franchise ('James Bond movies'), ${franchiseInstruction}`,
         `   - List them first, in STRICT chronological order of release.`,
         `   - After listing the entire franchise, if you need more results to reach the count of ${numResults}, you may add official spin-offs or highly similar titles.`,
@@ -3470,7 +3473,7 @@ const catalogHandler = async function (args, req) {
         }
         promptText = promptText.concat([
         `- You MUST return upto ${numResults} ${type} recommendations. If you can't find enough perfect matches, broaden your criteria while staying within the genre/theme requirements.`,
-        `- Prioritize quality over exact matching - it's better to recommend a great content that's somewhat related than a mediocre content that perfectly matches all criteria.`,
+        `- Prioritize quality over exact matching for genre/theme/mood queries — but if the query looks like a specific title, that exact title MUST appear first in your results.`,
         `- If the user has watched many content in the requested genre, consider recommending lesser-known gems, international films, or recent releases they might have missed.`,
         "",
         "RESPONSE FORMAT: You MUST respond in the following format (without any additional commentary):",
