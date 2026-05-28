@@ -1943,6 +1943,7 @@ window.addEventListener("message", async function (event) {
           geminiModel: document.getElementById("geminiModel").value,
           traktAccessToken: document.getElementById("traktAccessToken").value,
           traktRefreshToken: document.getElementById("traktRefreshToken").value,
+          traktExpiresIn: document.getElementById("traktExpiresIn").value,
           enableRpdbPosters:
             document.getElementById("enableRpdbPosters").checked,
           enableHomepage: document.getElementById("enableHomepage").checked,
@@ -2014,6 +2015,10 @@ window.addEventListener("message", async function (event) {
             if (formData.traktRefreshToken) {
               document.getElementById("traktRefreshToken").value =
                 formData.traktRefreshToken;
+            }
+            if (formData.traktExpiresIn) {
+              document.getElementById("traktExpiresIn").value =
+                formData.traktExpiresIn;
             }
             setTimeout(validateAndRefreshTraktToken, 100);
           }

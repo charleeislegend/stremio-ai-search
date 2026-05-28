@@ -870,6 +870,14 @@ async function startServer() {
 
           const tokenData = await tokenResponse.json();
 
+          const safePayload = JSON.stringify({
+            type: "TRAKT_AUTH_SUCCESS",
+            access_token: tokenData.access_token,
+            refresh_token: tokenData.refresh_token,
+            expires_in: tokenData.expires_in,
+            state: state || "",
+          });
+
           // Send the token data back to the parent window
           res.send(`
             <html>
@@ -878,16 +886,10 @@ async function startServer() {
                 <p>You can close this window now.</p>
                 <script>
                   if (window.opener) {
-                    window.opener.postMessage({
-                      type: "TRAKT_AUTH_SUCCESS",
-                      access_token: "${tokenData.access_token}",
-                      refresh_token: "${tokenData.refresh_token}",
-                      expires_in: ${tokenData.expires_in},
-                      state: "${(state || "").replace(/"/g, "")}"
-                    }, "${HOST}");
+                    window.opener.postMessage(${safePayload}, "${HOST}");
                     window.close();
                   }
-                </script>
+                <\/script>
               </body>
             </html>
           `);
@@ -1365,47 +1367,6 @@ async function startServer() {
         `);
       });
 
-      // Update Trakt.tv token refresh endpoint to use pre-configured credentials
-      addonRouter.post("/oauth/refresh", async (req, res) => {
-        try {
-          const { refresh_token } = req.body;
-
-          if (!refresh_token) {
-            return res.status(400).json({ error: "Missing refresh token" });
-          }
-
-          const response = await fetch("https://api.trakt.tv/oauth/token", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-              "User-Agent": "StremioAISearch/1.0 (https://github.com/itcon-pty-au/stremio-ai-search)",
-              "trakt-api-version": "2",
-              "trakt-api-key": TRAKT_CLIENT_ID,
-            },
-            body: JSON.stringify({
-              refresh_token,
-              client_id: TRAKT_CLIENT_ID,
-              client_secret: TRAKT_CLIENT_SECRET,
-              redirect_uri: `${HOST}/aisearch/oauth/callback`,
-              grant_type: "refresh_token",
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error("Failed to refresh token");
-          }
-
-          const tokenData = await response.json();
-          res.json(tokenData);
-        } catch (error) {
-          logger.error("Token refresh error:", {
-            error: error.message,
-            stack: error.stack,
-          });
-          res.status(500).json({ error: "Failed to refresh token" });
-        }
-      });
     });
 
     app.use("/", addonRouter);
