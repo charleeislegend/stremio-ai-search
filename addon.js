@@ -2678,6 +2678,24 @@ function getRpdbTierFromApiKey(apiKey) {
   }
 }
 
+/**
+ * Runs an array of async tasks with a maximum concurrency limit.
+ * Prevents simultaneous API calls from overwhelming rate limits.
+ */
+async function limitedPromiseAll(tasks, concurrency = 8) {
+  const results = new Array(tasks.length);
+  let index = 0;
+  async function worker() {
+    while (index < tasks.length) {
+      const i = index++;
+      results[i] = await tasks[i]();
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 const catalogHandler = async function (args, req) {
   const startTime = Date.now();
   const { id, type, extra } = args;
@@ -2958,12 +2976,29 @@ const catalogHandler = async function (args, req) {
     // For recommendation queries, use the new workflow with genre discovery
     if (isRecommendation) {
 
-      // Make the genre discovery API call
-      const discoveryResult = await discoverTypeAndGenres(
-        searchQuery,
-        aiClient
-      );
-      discoveredGenres = discoveryResult.genres;
+      const hasTraktConfig = !!(DEFAULT_TRAKT_CLIENT_ID && configData.TraktAccessToken);
+
+      if (hasTraktConfig) {
+        // Genre discovery is only needed to filter Trakt data — run both in parallel.
+        logger.info("Fetching Trakt data and discovering genres in parallel", {
+          hasTraktClientId: !!DEFAULT_TRAKT_CLIENT_ID,
+          hasTraktAccessToken: !!configData.TraktAccessToken,
+          query: searchQuery,
+        });
+
+        const [discoveryResult, rawTraktData] = await Promise.all([
+          discoverTypeAndGenres(searchQuery, aiClient),
+          fetchTraktWatchedAndRated(
+            DEFAULT_TRAKT_CLIENT_ID,
+            configData.TraktAccessToken,
+            type === "movie" ? "movies" : "shows",
+            configData
+          ),
+        ]);
+
+        discoveredGenres = discoveryResult.genres;
+        traktData = rawTraktData;
+      }
 
       // Log if we couldn't discover any genres for a recommendation query
       if (discoveredGenres.length === 0) {
@@ -2982,27 +3017,10 @@ const catalogHandler = async function (args, req) {
         originalType: type,
       });
 
-      // If Trakt is configured, get user data ONLY for recommendation queries
-      if (DEFAULT_TRAKT_CLIENT_ID && configData.TraktAccessToken) {
-        logger.info("Fetching Trakt data for recommendation query", {
-          hasTraktClientId: !!DEFAULT_TRAKT_CLIENT_ID,
-          traktClientIdLength: DEFAULT_TRAKT_CLIENT_ID?.length,
-          hasTraktAccessToken: !!configData.TraktAccessToken,
-          traktAccessTokenLength: configData.TraktAccessToken?.length,
-          isRecommendation: isRecommendation,
-          query: searchQuery,
-        });
-
-        traktData = await fetchTraktWatchedAndRated(
-          DEFAULT_TRAKT_CLIENT_ID,
-          configData.TraktAccessToken,
-          type === "movie" ? "movies" : "shows",
-          configData
-        );
+      if (traktData) {
 
         // Filter Trakt data based on discovered genres if we have any
-        if (traktData) {
-          if (discoveredGenres.length > 0) {
+        if (discoveredGenres.length > 0) {
             filteredTraktData = filterTraktDataByGenres(
               traktData,
               discoveredGenres
@@ -3031,7 +3049,7 @@ const catalogHandler = async function (args, req) {
                 });
               }
             }
-          } else {
+        } else {
             // When no genres are discovered, use all Trakt data
             filteredTraktData = {
               recentlyWatched: traktData.watched?.slice(0, 100) || [],
@@ -3054,7 +3072,6 @@ const catalogHandler = async function (args, req) {
               }
             );
           }
-        }
       }
     }
 
@@ -3124,7 +3141,7 @@ const catalogHandler = async function (args, req) {
           return { metas: [] };
         }
 
-        const metaPromises = selectedRecommendations.map((item) =>
+        const metaPromises = selectedRecommendations.map((item) => () =>
           toStremioMeta(
             item,
             platform,
@@ -3137,7 +3154,7 @@ const catalogHandler = async function (args, req) {
           )
         );
 
-        const metas = (await Promise.all(metaPromises)).filter(Boolean);
+        const metas = (await limitedPromiseAll(metaPromises)).filter(Boolean);
 
         if (metas.length === 0 && !exactMatchMeta) {
           logger.error("All AI recommendations failed TMDB lookup", {
@@ -3822,7 +3839,7 @@ const catalogHandler = async function (args, req) {
         })),
       });
 
-      const metaPromises = selectedRecommendations.map((item) =>
+      const metaPromises = selectedRecommendations.map((item) => () =>
         toStremioMeta(
           item,
           platform,
@@ -3834,7 +3851,7 @@ const catalogHandler = async function (args, req) {
         )
       );
 
-      const metas = (await Promise.all(metaPromises)).filter(Boolean);
+      const metas = (await limitedPromiseAll(metaPromises)).filter(Boolean);
 
       // Log detailed results
       logger.debug("Meta conversion results", {
