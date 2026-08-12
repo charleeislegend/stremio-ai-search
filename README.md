@@ -37,9 +37,7 @@ An intelligent search addon for Stremio powered by AI (Gemini-compatible or any 
 > [!IMPORTANT]
 > **Prefer OpenRouter over a direct Gemini API key.**
 >
-> Google has started rejecting requests from the hosted addon's server with a *"not allowed region"* error — ironically, the server is in Los Angeles. This left a lot of users unable to get any results at all. The hosted instance now runs Gemini **through OpenRouter**, which sidesteps the block completely.
->
-> If you self-host on a VPS, you may well run into the same thing. Going through OpenRouter is the safer default.
+> Google has started rejecting requests from the hosted addon's server with a *"not allowed region"* error — ironically, the server is in Los Angeles. This left a lot of users unable to get any results at all. You can use 'Open AI compatible' AI provider and even select Gemini , which sidesteps the block completely.
 
 In the configuration page you can choose an AI provider:
 
@@ -54,7 +52,7 @@ Advanced option:
 
 ### Getting fresh results with OpenRouter's `:online` suffix
 
-Every model has a training cutoff, so recency-sensitive searches — "latest malayalam movies", "new series this year", anything naming the current year — tend to come back with titles that are a year or two out of date.
+Every model has a training cutoff, so recency-sensitive searches — "latest french movies", "new series this year", anything naming the current year — tend to come back with titles that are a year or two out of date.
 
 OpenRouter can run a live web search and hand the results to the model before it answers. Enable it by appending **`:online`** to your model id:
 
