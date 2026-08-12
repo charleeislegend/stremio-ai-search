@@ -9,6 +9,10 @@ const {
   createAiTextGenerator,
   getAiProviderConfigFromConfig,
 } = require("./utils/aiProvider");
+const {
+  detectQueryLanguage,
+  getLanguageName,
+} = require("./utils/queryLanguage");
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 const TMDB_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 day cache for TMDB
 const TMDB_DISCOVER_CACHE_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 day cache for TMDB discover (was 12 hours)
@@ -824,10 +828,61 @@ async function fetchTraktWatchedAndRated(
   return result;
 }
 
-async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includeAdult = false) {
+/** Lowercase, strip punctuation/diacritic noise so titles compare cleanly. */
+function normalizeTitleForMatch(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Picks the best TMDB search result for an AI-emitted title|year instead of
+ * blindly trusting results[0] (which is popularity-ordered, so a short title
+ * like "Identity" would resolve to "The Bourne Identity"). Scores each
+ * candidate on exact-title match, year proximity, and — when the user's query
+ * named a language — original_language. Results arrive popularity-ordered and
+ * ties keep the earlier (more popular) candidate.
+ */
+function pickBestTmdbResult(results, title, yearNum, queryLang) {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  const target = normalizeTitleForMatch(title);
+  let best = null;
+
+  for (const r of results) {
+    const rTitle = normalizeTitleForMatch(r.title || r.name);
+    const rOriginal = normalizeTitleForMatch(r.original_title || r.original_name);
+    const exactTitle = rTitle === target || rOriginal === target;
+
+    let score = 0;
+    if (exactTitle) score += 4;
+    else if (rTitle.includes(target) || target.includes(rTitle)) score += 1;
+
+    const rYear = parseInt(
+      String(r.release_date || r.first_air_date || "").slice(0, 4),
+      10
+    );
+    let yearMatch = false;
+    if (Number.isFinite(yearNum) && Number.isFinite(rYear)) {
+      yearMatch = Math.abs(rYear - yearNum) <= 1;
+      score += yearMatch ? 2 : -1;
+    }
+
+    const langMatch = Boolean(queryLang && r.original_language === queryLang);
+    if (langMatch) score += 3;
+
+    if (!best || score > best.score) {
+      best = { result: r, score, exactTitle, langMatch, yearMatch };
+    }
+  }
+  return best;
+}
+
+async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includeAdult = false, queryLang = null) {
   const startTime = Date.now();
-  logger.debug("Starting TMDB search", { title, type, year, includeAdult });
-  const cacheKey = `${title}-${type}-${year}-${language}-adult:${includeAdult}`;
+  logger.debug("Starting TMDB search", { title, type, year, includeAdult, queryLang });
+  const cacheKey = `${title}-${type}-${year}-${language}-adult:${includeAdult}-qlang:${queryLang || "none"}`;
 
   if (tmdbCache.has(cacheKey)) {
     const cached = tmdbCache.get(cacheKey);
@@ -850,64 +905,80 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includ
 
   try {
     const searchType = type === "movie" ? "movie" : "tv";
-    const searchParams = new URLSearchParams({
-      api_key: tmdbKey,
-      query: title,
-      year: year,
-      include_adult: includeAdult,
-      language: language,
-    });
+    const yearNum = parseInt(year, 10);
 
-    const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
-
-    logger.info("Making TMDB API call", {
-      url: searchUrl.replace(tmdbKey, "***"),
-      params: {
-        type: searchType,
+    const fetchSearchPage = async (withYear) => {
+      const searchParams = new URLSearchParams({
+        api_key: tmdbKey,
         query: title,
-        year,
-        language,
-      },
-    });
-
-    // Use withRetry for the search API call
-    const responseData = await withRetry(
-      async () => {
-        const searchResponse = await fetch(searchUrl);
-        if (!searchResponse.ok) {
-          const errorData = await searchResponse.json().catch(() => ({}));
-          let errorMessage;
-
-          // Handle specific error cases
-          if (searchResponse.status === 401) {
-            errorMessage = "Invalid TMDB API key";
-          } else if (searchResponse.status === 429) {
-            errorMessage = "TMDB API rate limit exceeded";
-          } else {
-            errorMessage = `TMDB API error: ${searchResponse.status} ${
-              errorData?.status_message || ""
-            }`;
-          }
-
-          const error = new Error(errorMessage);
-          error.status = searchResponse.status;
-          error.isRateLimit = searchResponse.status === 429;
-          error.isInvalidKey = searchResponse.status === 401;
-          throw error;
-        }
-        return searchResponse.json();
-      },
-      {
-        maxRetries: 3,
-        initialDelay: 1000,
-        maxDelay: 8000,
-        operationName: "TMDB search API call",
-        // Don't retry on invalid API key errors
-        shouldRetry: (error) =>
-          !error.isInvalidKey &&
-          (!error.status || error.status >= 500 || error.isRateLimit),
+        include_adult: includeAdult,
+        language: language,
+      });
+      // Use TMDB's strict year params: on /search/movie the generic `year`
+      // matches ANY release date (regional re-releases included) and
+      // /search/tv ignores `year` entirely.
+      if (withYear && Number.isFinite(yearNum)) {
+        searchParams.set(
+          searchType === "movie"
+            ? "primary_release_year"
+            : "first_air_date_year",
+          String(yearNum)
+        );
       }
-    );
+
+      const searchUrl = `${TMDB_API_BASE}/search/${searchType}?${searchParams.toString()}`;
+
+      logger.info("Making TMDB API call", {
+        url: searchUrl.replace(tmdbKey, "***"),
+        params: {
+          type: searchType,
+          query: title,
+          year: withYear && Number.isFinite(yearNum) ? yearNum : null,
+          language,
+        },
+      });
+
+      // Use withRetry for the search API call
+      return withRetry(
+        async () => {
+          const searchResponse = await fetch(searchUrl);
+          if (!searchResponse.ok) {
+            const errorData = await searchResponse.json().catch(() => ({}));
+            let errorMessage;
+
+            // Handle specific error cases
+            if (searchResponse.status === 401) {
+              errorMessage = "Invalid TMDB API key";
+            } else if (searchResponse.status === 429) {
+              errorMessage = "TMDB API rate limit exceeded";
+            } else {
+              errorMessage = `TMDB API error: ${searchResponse.status} ${
+                errorData?.status_message || ""
+              }`;
+            }
+
+            const error = new Error(errorMessage);
+            error.status = searchResponse.status;
+            error.isRateLimit = searchResponse.status === 429;
+            error.isInvalidKey = searchResponse.status === 401;
+            throw error;
+          }
+          return searchResponse.json();
+        },
+        {
+          maxRetries: 3,
+          initialDelay: 1000,
+          maxDelay: 8000,
+          operationName: "TMDB search API call",
+          // Don't retry on invalid API key errors
+          shouldRetry: (error) =>
+            !error.isInvalidKey &&
+            (!error.status || error.status >= 500 || error.isRateLimit),
+        }
+      );
+    };
+
+    const responseData = await fetchSearchPage(true);
 
     // Log response with error status if applicable
     if (responseData.status_code) {
@@ -940,8 +1011,52 @@ async function searchTMDB(title, type, year, tmdbKey, language = "en-US", includ
       });
     }
 
-    if (responseData?.results?.[0]) {
-      const result = responseData.results[0];
+    let pick = pickBestTmdbResult(responseData?.results, title, yearNum, queryLang);
+
+    // The AI's year can be wrong, and the strict year filter then either
+    // excludes the right title or leaves only lookalikes. Retry once without
+    // the year when the filtered page produced no exact-title match (or missed
+    // the requested original language) and keep whichever pick scores higher.
+    const filteredPageUnconvincing =
+      Number.isFinite(yearNum) &&
+      (!pick || !pick.exactTitle || (queryLang && !pick.langMatch));
+    if (filteredPageUnconvincing) {
+      const retryData = await fetchSearchPage(false);
+      const retryPick = pickBestTmdbResult(
+        retryData?.results,
+        title,
+        yearNum,
+        queryLang
+      );
+      if (retryPick && (!pick || retryPick.score > pick.score)) {
+        logger.info("TMDB year-filtered pick unconvincing, using unfiltered result", {
+          title,
+          year: yearNum,
+          queryLang,
+          pickedTitle: retryPick.result.title || retryPick.result.name,
+          pickedScore: retryPick.score,
+          previousScore: pick ? pick.score : null,
+        });
+        pick = retryPick;
+      }
+    }
+
+    if (pick) {
+      const result = pick.result;
+
+      logger.info("TMDB result selected", {
+        title,
+        year: yearNum,
+        queryLang,
+        selected: result.title || result.name,
+        selectedYear: String(
+          result.release_date || result.first_air_date || ""
+        ).slice(0, 4),
+        selectedLang: result.original_language,
+        score: pick.score,
+        exactTitle: pick.exactTitle,
+        langMatch: pick.langMatch,
+      });
 
       const tmdbData = {
         poster: result.poster_path
@@ -1912,7 +2027,8 @@ const tmdbData = await searchTMDB(
     item.year,
     tmdbKey,
     language,
-    includeAdult
+    includeAdult,
+    item.queryLang || null
   );
 
   if (!tmdbData || !tmdbData.imdb_id) {
@@ -2968,6 +3084,17 @@ const catalogHandler = async function (args, req) {
 
     // Now check if it's a recommendation query
     const isRecommendation = isRecommendationQuery(searchQuery);
+
+    // Did the query name a language ("latest malayalam movies", "k-drama...")?
+    // Used to steer the AI prompt and to disambiguate TMDB title resolution.
+    const queryLang = detectQueryLanguage(searchQuery);
+    if (queryLang) {
+      logger.info("Query language detected", {
+        searchQuery,
+        queryLang,
+        language: getLanguageName(queryLang),
+      });
+    }
     let discoveredType = type;
     let discoveredGenres = [];
     let traktData = null;
@@ -3526,6 +3653,16 @@ const catalogHandler = async function (args, req) {
         }
       }
 
+      if (queryLang) {
+        promptText.push(
+          `- LANGUAGE REQUIREMENT: The user asked for ${getLanguageName(
+            queryLang
+          )}-language content. ALL recommendations MUST be titles whose ORIGINAL language is ${getLanguageName(
+            queryLang
+          )}. Do NOT include titles originally made in other languages, and do NOT substitute a popular foreign film with a similar name.`
+        );
+      }
+
       promptText = promptText.join("\n");
 
       logger.info("Making AI API call", {
@@ -3646,6 +3783,9 @@ const catalogHandler = async function (args, req) {
               name,
               year: yearNum,
               type,
+              // Carried through to searchTMDB so title resolution can prefer
+              // candidates in the language the user asked for.
+              queryLang: queryLang || undefined,
               id: `ai_${type}_${name
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, "_")}`,
@@ -4213,6 +4353,7 @@ module.exports = {
   clearTmdbDetailsCache,
   clearTmdbDiscoverCache,
   clearAiCache,
+  pickBestTmdbResult,
   removeAiCacheByKeywords,
   purgeEmptyAiCacheEntries,
   clearRpdbCache,
