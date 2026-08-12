@@ -1658,6 +1658,112 @@ function isRecommendationQuery(query) {
 }
 
 /**
+ * Does the query ask for new/recent releases? These are the queries where the
+ * AI's training cutoff hurts, so we ground the prompt with live TMDB data.
+ * A bare "new" is only counted in release-related phrases ("new movies") so
+ * "new york movies" doesn't trigger. A year mention only counts for the
+ * current or previous year — "movies from 1995" is not a recency query.
+ */
+function isRecencyQuery(query, currentYear) {
+  const q = String(query || "").toLowerCase();
+  if (
+    /\b(latest|newest|recent|recently|just released|brand new|now playing|in theat(?:er|re)s|this year|this month|currently airing|new releases?)\b/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+  if (/\bnew\b\s+(movies?|films?|shows?|series|releases?)/.test(q)) {
+    return true;
+  }
+  if (
+    currentYear &&
+    new RegExp(`\\b(${currentYear}|${currentYear - 1})\\b`).test(q)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Fetches recently released titles from TMDB Discover to inject into the AI
+ * prompt as context on recency queries — the AI still authors every
+ * recommendation, this just tells it what exists past its training cutoff.
+ * Language-aware when the query named one ("latest malayalam movies").
+ * Cached per day/type/language via tmdbDiscoverCache.
+ */
+async function fetchRecentReleasesForContext(
+  type,
+  tmdbKey,
+  queryLang = null,
+  includeAdult = false
+) {
+  const searchType = type === "movie" ? "movie" : "tv";
+  const dateKey =
+    searchType === "movie" ? "primary_release_date" : "first_air_date";
+
+  const now = new Date();
+  const toDate = now.toISOString().slice(0, 10);
+  const from = new Date(now);
+  from.setMonth(from.getMonth() - 12);
+  const fromDate = from.toISOString().slice(0, 10);
+
+  // toDate in the key rotates the cache daily
+  const cacheKey = `recent_${searchType}_${queryLang || "any"}_${toDate}_adult:${includeAdult}`;
+  if (tmdbDiscoverCache.has(cacheKey)) {
+    const cached = tmdbDiscoverCache.get(cacheKey);
+    logger.debug("Recent releases cache hit", {
+      cacheKey,
+      count: cached.data?.length,
+    });
+    return cached.data || [];
+  }
+
+  const params = new URLSearchParams({
+    api_key: tmdbKey,
+    sort_by: "popularity.desc",
+    include_adult: String(includeAdult),
+    page: "1",
+  });
+  params.set(`${dateKey}.gte`, fromDate);
+  params.set(`${dateKey}.lte`, toDate);
+  if (queryLang) params.set("with_original_language", queryLang);
+
+  try {
+    const url = `${TMDB_API_BASE}/discover/${searchType}?${params.toString()}`;
+    logger.info("Fetching recent releases for AI context", {
+      url: url.replace(tmdbKey, "***"),
+      type: searchType,
+      queryLang,
+      window: `${fromDate}..${toDate}`,
+    });
+    const response = await fetch(url);
+    if (!response.ok) {
+      logger.error("Recent releases fetch failed", {
+        status: response.status,
+        type: searchType,
+        queryLang,
+      });
+      return [];
+    }
+    const data = await response.json();
+    const results = (data.results || []).slice(0, 20);
+    tmdbDiscoverCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: results,
+    });
+    return results;
+  } catch (error) {
+    logger.error("Recent releases fetch error", {
+      error: error.message,
+      type: searchType,
+      queryLang,
+    });
+    return [];
+  }
+}
+
+/**
  * Checks if an item is in the user's watch history or rated items
  * @param {Object} item - The item to check
  * @param {Array} watchHistory - The user's watch history from Trakt
@@ -3559,6 +3665,49 @@ const catalogHandler = async function (args, req) {
         );
       }
 
+      // On recency queries the AI's training cutoff means it cannot know the
+      // newest releases, so ground the prompt with live TMDB data (filtered to
+      // the requested language when one was detected). The AI still authors
+      // every recommendation — this only tells it what exists.
+      if (isRecencyQuery(searchQuery, currentYear)) {
+        const recentReleases = await fetchRecentReleasesForContext(
+          type,
+          tmdbKey,
+          queryLang,
+          includeAdult
+        );
+        if (recentReleases.length > 0) {
+          const recentTitles = recentReleases
+            .map((item) => {
+              const title = item.title || item.name;
+              const date = (item.release_date || item.first_air_date || "").slice(0, 4);
+              const overview = String(item.overview || "").slice(0, 120);
+              return `- ${title} (${date})${overview ? `: ${overview}` : ""}`;
+            })
+            .join("\n");
+
+          promptText.push(
+            "RECENT RELEASES CONTEXT (live from TMDB, current as of today):",
+            "The user is asking about new/recent releases. Your training data may not include the newest titles. Every title below is a REAL, released title matching the requested recency" +
+              (queryLang
+                ? ` and original language (${getLanguageName(queryLang)})`
+                : "") +
+              ".",
+            "For the recent portion of your recommendations, choose the best matches for the query FROM THIS LIST rather than from memory. You may add older titles you know where the query allows it.",
+            "",
+            recentTitles,
+            ""
+          );
+
+          logger.info("Injected recent releases context into prompt", {
+            searchQuery,
+            type,
+            queryLang,
+            count: recentReleases.length,
+          });
+        }
+      }
+
       let examplesText;
       if (type === 'movie') {
         examplesText = [
@@ -3602,7 +3751,11 @@ const catalogHandler = async function (args, req) {
         `3. GENERAL RECOMMENDATIONS: For ALL other queries, provide diverse recommendations that best match the query's theme, genre, and mood.`,
         `   - Order these results by their relevance to the query.`,
         "CRITICAL REQUIREMENTS:",
-        `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`,]);
+        // Only instruct the model to use Google Search when grounding is
+        // actually enabled — otherwise it's told to use a tool it doesn't have.
+        aiProviderConfig.enableGrounding
+          ? `- You MUST use the Google Search tool to find ALL recommendations. Your internal knowledge is outdated and should only be used in conjunction with Google search tool for this task.`
+          : `- For new or recent releases, rely on the RECENT RELEASES CONTEXT above when provided — your internal knowledge of very recent titles may be incomplete or outdated.`,]);
         if (isHomepageQuery) {
           const rotationBucket = Math.floor(Math.random() * 50) + 1;
           promptText.push(
