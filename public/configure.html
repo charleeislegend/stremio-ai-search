@@ -552,14 +552,13 @@
             >AI Provider <span class="required">*</span></label
           >
           <select id="aiProvider" class="form-select">
-            <option value="gemini" selected>Gemini (Google AI Studio)</option>
-            <option value="openai-compat">
+            <option value="openai-compat" selected>
               OpenAI-compatible (OpenAI / OpenRouter / Z.ai / etc.)
             </option>
+            <option value="gemini">Gemini (Google AI Studio)</option>
           </select>
           <div class="help-text">
-            Choose either a Gemini-compatible model or any OpenAI-compatible
-            endpoint.
+            Choose any OpenAI-compatible endpoint or a Gemini-compatible model.
           </div>
         </div>
 
@@ -1653,9 +1652,9 @@
               // Pre-fill the form with the existing configuration
               if (config.AiProvider) {
                 document.getElementById("aiProvider").value = config.AiProvider;
-              } else if (config.OpenAICompatApiKey && !config.GeminiApiKey) {
+              } else if (config.GeminiApiKey && !config.OpenAICompatApiKey) {
                 // Backwards-compatible detection for configs created before AiProvider existed
-                document.getElementById("aiProvider").value = "openai-compat";
+                document.getElementById("aiProvider").value = "gemini";
               }
               toggleAiProviderVisibility();
 
