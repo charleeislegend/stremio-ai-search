@@ -2,6 +2,11 @@
   <img src="public/logo.png" alt="AI Search" width="120" height="120" style="background: #2a2a2a; border-radius: 20px; padding: 20px;"/>
 </div>
 
+> [!IMPORTANT]
+> **Addon does not work directly with Gemini AI provider, you can use Gemini using OpenRouter (Select Open AI Compatible in AI Provider)**
+>
+>
+
 # Stremio AI Search
 
 An intelligent search addon for Stremio powered by AI (Gemini-compatible or any OpenAI-compatible provider like OpenAI, OpenRouter, Z.ai). Get personalized movie and TV series recommendations based on natural language queries.
