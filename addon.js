@@ -1338,7 +1338,11 @@ const manifest = {
   description: "AI-powered movie and series recommendations",
   resources: [
     "catalog",
-    "meta",
+    {
+      name: "meta",
+      types: ["movie", "series"],
+      idPrefixes: ["ai-recs"]
+    },
     {
       name: "stream",
       types: ["movie", "series"],
