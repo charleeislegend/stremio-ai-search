@@ -1414,6 +1414,40 @@ async function startServer() {
       }
     });
 
+    app.get(
+      ["/api/trakt/status", "/aisearch/api/trakt/status"],
+      async (req, res) => {
+        try {
+          const username = (req.query.username || "").trim();
+          if (!username) {
+            return res.status(400).json({ error: "Missing username" });
+          }
+
+          const tokenData = await getTokens(username);
+          if (!tokenData) {
+            return res.json({ connected: false, reason: "no_tokens" });
+          }
+
+          if (tokenData.expires_at < Date.now() + 5 * 60 * 1000) {
+            const newTokens = await refreshTraktToken(
+              username,
+              tokenData.refresh_token
+            );
+            if (!newTokens) {
+              return res.json({ connected: false, reason: "refresh_failed" });
+            }
+          }
+
+          return res.json({ connected: true });
+        } catch (error) {
+          logger.error("Trakt status endpoint error:", {
+            error: error.message,
+          });
+          return res.status(500).json({ error: "Server error" });
+        }
+      }
+    );
+
     app.post(["/decrypt", "/aisearch/decrypt"], express.json(), (req, res) => {
       try {
         const { encryptedConfig } = req.body;

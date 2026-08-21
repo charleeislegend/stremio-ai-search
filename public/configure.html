@@ -1885,14 +1885,57 @@ window.addEventListener("message", async function (event) {
       async function validateAndRefreshTraktToken() {
         const existingUsername = document.getElementById("traktUsername").value.trim();
 
-        // This function now only runs in edit mode if a username is already set.
         if (existingUsername) {
+            // A token in the hidden field means the user just completed the OAuth
+            // flow in this session; the server hasn't stored it yet, so skip the check.
+            const freshToken = document.getElementById("traktAccessToken").value.trim();
+            if (freshToken) {
+                updateTraktStatus(
+                    `Connected as ${existingUsername}`,
+                    "#2a5a2a",
+                    `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`,
+                    true
+                );
+                return;
+            }
+
             updateTraktStatus(
-                `Connected as ${existingUsername}`,
-                "#2a5a2a", // Green color
-                `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`,
-                true
+                "Checking Trakt.tv connection...",
+                "#666",
+                `Verifying your Trakt.tv connection for <strong>${existingUsername}</strong>...`
             );
+
+            try {
+                const response = await fetch(
+                    `/aisearch/api/trakt/status?username=${encodeURIComponent(existingUsername)}`
+                );
+                if (!response.ok) throw new Error(`Status check failed: ${response.status}`);
+                const status = await response.json();
+
+                if (status.connected) {
+                    updateTraktStatus(
+                        `Connected as ${existingUsername}`,
+                        "#2a5a2a", // Green color
+                        `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. To change accounts, use the login button again.`,
+                        true
+                    );
+                } else {
+                    updateTraktStatus(
+                        "Re-Login with Trakt.tv",
+                        "#5a2a2a", // Red color
+                        `<strong>Connection expired:</strong> Your Trakt.tv connection for <strong>${existingUsername}</strong> is no longer valid. Please click the button above to log in again.`
+                    );
+                }
+            } catch (error) {
+                console.error("Trakt status check error:", error);
+                // Couldn't verify — fall back to showing connected rather than scaring the user.
+                updateTraktStatus(
+                    `Connected as ${existingUsername}`,
+                    "#2a5a2a",
+                    `Your addon is connected to Trakt.tv as <strong>${existingUsername}</strong>. (Connection status could not be verified right now.)`,
+                    true
+                );
+            }
             return;
         }
 
