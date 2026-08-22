@@ -1868,7 +1868,7 @@ window.addEventListener("message", async function (event) {
             updateTraktStatus(
               `Connected as ${username}`,
               "#2a5a2a", // Green color for success
-              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon' below to save.`,
+              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon in Stremio' below to reinstall the addon and save your connection.`,
               true
             );
           } catch (error) {
@@ -1923,7 +1923,7 @@ window.addEventListener("message", async function (event) {
                     updateTraktStatus(
                         "Re-Login with Trakt.tv",
                         "#5a2a2a", // Red color
-                        `<strong>Connection expired:</strong> Your Trakt.tv connection for <strong>${existingUsername}</strong> is no longer valid. Please click the button above to log in again.`
+                        `<strong>Connection expired:</strong> Your Trakt.tv connection for <strong>${existingUsername}</strong> is no longer valid. Please click the button above to log in again, then reinstall the addon via 'Configure Addon in Stremio' below.`
                     );
                 }
             } catch (error) {

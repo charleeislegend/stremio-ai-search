@@ -10,6 +10,25 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+// Redaction patterns for secrets that must never reach log files.
+// Order matters: specific key formats first, generic token shapes last.
+const REDACTION_PATTERNS = [
+  [/AIza[0-9A-Za-z_-]{30,}/g, "AIza***REDACTED***"], // Google/Gemini API keys
+  [/sk-[A-Za-z0-9_-]{20,}/g, "sk-***REDACTED***"], // OpenAI-compatible keys
+  [/(api[_-]?key['"]?\s*[=:]\s*['"]?)[A-Za-z0-9_-]{8,}/gi, "$1***REDACTED***"],
+  [/(Bearer\s+)[A-Za-z0-9._~+/-]{8,}=*/gi, "$1***REDACTED***"],
+  [/\b[a-f0-9]{64}\b/g, "***REDACTED-TOKEN***"], // Trakt access/refresh tokens (64 hex)
+];
+
+function redactSecrets(text) {
+  if (typeof text !== "string" || !text) return text;
+  let out = text;
+  for (const [pattern, replacement] of REDACTION_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
 // Keep track of last query and timestamp to prevent duplicates
 let lastQuery = "";
 let lastQueryTime = 0;
@@ -24,8 +43,10 @@ const DUPLICATE_WINDOW = 15000; // 15 second window to detect duplicates
 function writeLog(level, message, data) {
   // Format the log message
   const timestamp = new Date().toISOString();
-  const formattedData = data ? `\n${JSON.stringify(data, null, 2)}` : "";
-  const logMessage = `[${timestamp}] ${level}: ${message}${formattedData}\n`;
+  const formattedData = data
+    ? `\n${redactSecrets(JSON.stringify(data, null, 2))}`
+    : "";
+  const logMessage = `[${timestamp}] ${level}: ${redactSecrets(message)}${formattedData}\n`;
 
   // Write to file
   fs.appendFile(
@@ -89,8 +110,8 @@ function logQuery(query) {
  */
 function logEmptyCatalog(query, data = {}) {
   const timestamp = new Date().toISOString();
-  const formattedData = JSON.stringify(data, null, 2);
-  const logMessage = `[${timestamp}] EMPTY_CATALOG: Query "${query}" returned no results\n${formattedData}\n`;
+  const formattedData = redactSecrets(JSON.stringify(data, null, 2));
+  const logMessage = `[${timestamp}] EMPTY_CATALOG: Query "${redactSecrets(query)}" returned no results\n${formattedData}\n`;
 
   // Write to error log file
   fs.appendFile(
@@ -120,8 +141,8 @@ const logger = {
   error: function (message, data) {
     // Errors always log regardless of ENABLE_LOGGING
     writeLog("ERROR", message, data);
-    const formattedData = data ? ` ${JSON.stringify(data)}` : "";
-    console.error(`[ERROR] ${message}${formattedData}`);
+    const formattedData = data ? ` ${redactSecrets(JSON.stringify(data))}` : "";
+    console.error(`[ERROR] ${redactSecrets(message)}${formattedData}`);
   },
   query: logQuery, // Add the query logger to the logger object
   emptyCatalog: function (reason, data = {}) {
@@ -153,8 +174,8 @@ const logger = {
 
     // Always log empty catalogs regardless of ENABLE_LOGGING
     const timestamp = new Date().toISOString();
-    const formattedData = JSON.stringify(data, null, 2);
-    const logMessage = `[${timestamp}] EMPTY_CATALOG: ${reason}\n${formattedData}\n`;
+    const formattedData = redactSecrets(JSON.stringify(data, null, 2));
+    const logMessage = `[${timestamp}] EMPTY_CATALOG: ${redactSecrets(reason)}\n${formattedData}\n`;
 
     // Write to error log file
     fs.appendFile(
