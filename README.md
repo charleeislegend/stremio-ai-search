@@ -2,7 +2,7 @@
   <img src="public/logo.png" alt="AI Search" width="120" height="120" style="background: #2a2a2a; border-radius: 20px; padding: 20px;"/>
 </div>
 
-# 22/08/2026 - Addon currently available. Maintenance activities in progress.
+## 22/08/2026 - Addon currently unavailable. Maintenance activities in progress.
 
 > [!IMPORTANT]
 > **Addon does not work directly with Gemini AI provider, you can use Gemini using OpenRouter (Select Open AI Compatible in AI Provider)**
