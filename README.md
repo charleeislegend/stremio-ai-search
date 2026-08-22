@@ -11,7 +11,7 @@
 
 An intelligent search addon for Stremio powered by AI (Gemini-compatible or any OpenAI-compatible provider like OpenAI, OpenRouter, Z.ai). Get personalized movie and TV series recommendations based on natural language queries.
 
-<img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fstremio.itcon.au%2Faisearch%2Fstats%2Fcount%3Fformat%3Djson&query=%24.count&label=Recommendations%20served&color=blue" alt="Recommendations served" />
+<img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fstremio.tomz.dev%2Faisearch%2Fstats%2Fcount%3Fformat%3Djson&query=%24.count&label=Recommendations%20served&color=blue" alt="Recommendations served" />
 
 ## Features
 
@@ -27,7 +27,7 @@ An intelligent search addon for Stremio powered by AI (Gemini-compatible or any 
 
 ## Installation
 
-1. Visit [Addon configuration](https://stremio.itcon.au/aisearch/configure)
+1. Visit [Addon configuration](https://stremio.tomz.dev/aisearch/configure)
 2. Enter your API keys
 3. Provide optional parameters
 4. Install
@@ -510,83 +510,77 @@ When self-hosting the addon, you can configure the following environment variabl
 
 ### Admin Endpoints
 
-The addon provides several administrative endpoints for cache management. All endpoints require an admin token which should be set in the `.env` file as `ADMIN_TOKEN`.
+The addon exposes administrative endpoints for cache management. They are
+protected by an admin token set as `ADMIN_TOKEN` in `.env`. If `ADMIN_TOKEN`
+is unset the endpoints refuse every request.
 
-### Cache Management
+The token is sent in the **`X-Admin-Token` request header** — never in the
+URL, where it would be written to access logs and proxy logs. Because a
+browser address bar cannot set a header, use `curl` (or any HTTP client):
 
-All endpoints are GET requests and require the `adminToken` as a query parameter. You can run any of these endpoints directly in your browser.
+```bash
+# Put the token in a variable once; it never appears in the URL.
+export ADMIN_TOKEN='your-admin-token'
+H='X-Admin-Token: '"$ADMIN_TOKEN"
+BASE='https://stremio.tomz.dev/aisearch'
+```
 
 #### Cache Statistics
 
 ```bash
-GET https://stremio.itcon.au/aisearch/cache/stats?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/stats"
 ```
 
 #### AI Cache Management
 
 ```bash
 # Clear all AI cache
-GET https://stremio.itcon.au/aisearch/cache/clear/ai?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/ai"
 
 # Remove specific AI cache entries by keywords
-GET https://stremio.itcon.au/aisearch/cache/clear/ai/keywords?adminToken=your-admin-token&keywords=ocean%20thriller
+curl -H "$H" "$BASE/cache/clear/ai/keywords?keywords=ocean%20thriller"
 
 # Purge all empty AI recommendation entries from the cache
-GET https://stremio.itcon.au/aisearch/cache/purge/ai-empty?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/purge/ai-empty"
 ```
 
 #### TMDB Cache Management
 
 ```bash
 # Clear TMDB cache
-GET https://stremio.itcon.au/aisearch/cache/clear/tmdb?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/tmdb"
 
 # Clear TMDB details cache
-GET https://stremio.itcon.au/aisearch/cache/clear/tmdb-details?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/tmdb-details"
 
 # Clear TMDB discover cache
-GET https://stremio.itcon.au/aisearch/cache/clear/tmdb-discover?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/tmdb-discover"
 
 # List all TMDB discover cache keys
-GET https://stremio.itcon.au/aisearch/cache/list/tmdb-discover?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/list/tmdb-discover"
 
 # Remove a specific TMDB discover cache item
-GET https://stremio.itcon.au/aisearch/cache/remove/tmdb-discover?key=discover_series_80_2023-09-01_en-US&adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/remove/tmdb-discover?key=discover_series_80_2023-09-01_en-US"
 ```
 
 #### Other Cache Management
 
 ```bash
 # Clear RPDB cache
-GET https://stremio.itcon.au/aisearch/cache/clear/rpdb?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/rpdb"
 
-# Clear Trakt cache
-GET https://stremio.itcon.au/aisearch/cache/clear/trakt?adminToken=your-admin-token
-
-# Clear Trakt raw data cache
-GET https://stremio.itcon.au/aisearch/cache/clear/trakt-raw?adminToken=your-admin-token
+# Clear Trakt cache / Trakt raw data cache (kept for installs that still carry Trakt data)
+curl -H "$H" "$BASE/cache/clear/trakt"
+curl -H "$H" "$BASE/cache/clear/trakt-raw"
 
 # Clear query analysis cache
-GET https://stremio.itcon.au/aisearch/cache/clear/query-analysis?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/query-analysis"
 
 # Clear all caches
-GET https://stremio.itcon.au/aisearch/cache/clear/all?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/clear/all"
 
 # Save all caches to files
-GET https://stremio.itcon.au/aisearch/cache/save?adminToken=your-admin-token
-```
-
-### Example Usage
-
-You can use these endpoints directly in your browser by visiting:
-
-```
-https://stremio.itcon.au/aisearch/cache/clear/ai?adminToken=your-admin-token
-https://stremio.itcon.au/aisearch/cache/clear/ai/keywords?adminToken=your-admin-token&keywords=your search terms
-https://stremio.itcon.au/aisearch/cache/purge/ai-empty?adminToken=your-admin-token
-https://stremio.itcon.au/aisearch/cache/list/tmdb-discover?adminToken=your-admin-token
-https://stremio.itcon.au/aisearch/cache/remove/tmdb-discover?key=discover_series_80_2023-09-01_en-US&adminToken=your-admin-token
-https://stremio.itcon.au/aisearch/cache/clear/all?adminToken=your-admin-token
+curl -H "$H" "$BASE/cache/save"
 ```
 
 ### Response Examples
