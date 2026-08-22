@@ -37,7 +37,7 @@ const zlib = require("zlib");
 const { initDb, storeTokens, getTokens } = require("./database");
 
 // Admin token for cache management
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "change-me-in-env-file";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
 // Cache persistence configuration
 const CACHE_BACKUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -49,10 +49,12 @@ if (!fs.existsSync(CACHE_FOLDER)) {
 }
 
 // Function to validate admin token
+// Token is read from the X-Admin-Token header (not the query string, which
+// leaks into access logs and proxies). Fails closed if ADMIN_TOKEN is unset.
 const validateAdminToken = (req, res, next) => {
-  const token = req.query.adminToken;
+  const token = req.headers["x-admin-token"];
 
-  if (!token || token !== ADMIN_TOKEN) {
+  if (!ADMIN_TOKEN || !token || token !== ADMIN_TOKEN) {
     return res
       .status(403)
       .json({ error: "Unauthorized. Invalid admin token." });
@@ -61,8 +63,51 @@ const validateAdminToken = (req, res, next) => {
   next();
 };
 
+// Remove orphaned .tmp files left behind by saves that died between
+// writeFile and rename (crash, OOM kill, SIGKILL). Tmp paths embed the pid,
+// so files from previous processes are never reused and must be swept here.
+function cleanupStaleTempFiles() {
+  try {
+    const files = fs.readdirSync(CACHE_FOLDER).filter((f) => f.endsWith(".tmp"));
+    let removed = 0;
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(CACHE_FOLDER, file));
+        removed++;
+      } catch (err) {
+        logger.warn(`Failed to delete stale temp cache file: ${file}`, {
+          error: err.message,
+        });
+      }
+    }
+    if (removed > 0) {
+      logger.info(`Removed ${removed} stale temporary cache file(s)`, {
+        cacheFolder: CACHE_FOLDER,
+      });
+    }
+  } catch (err) {
+    logger.warn("Failed to scan cache folder for stale temp files", {
+      error: err.message,
+    });
+  }
+}
+
 // Function to save all caches to files
+let saveInProgress = null;
+let tempFileCounter = 0;
 async function saveCachesToFiles() {
+  // Serialize saves: an hourly interval tick, the admin endpoint, or a
+  // shutdown save overlapping an in-flight save would race on temp files.
+  if (saveInProgress) {
+    return saveInProgress;
+  }
+  saveInProgress = doSaveCachesToFiles().finally(() => {
+    saveInProgress = null;
+  });
+  return saveInProgress;
+}
+
+async function doSaveCachesToFiles() {
   try {
     const { serializeAllCaches } = require("./addon");
     const allCaches = serializeAllCaches();
@@ -70,13 +115,15 @@ async function saveCachesToFiles() {
     const results = {};
     for (const [cacheName, cacheData] of Object.entries(allCaches)) {
       const cacheFilePath = path.join(CACHE_FOLDER, `${cacheName}.json.gz`);
-      const tempCacheFilePath = `${cacheFilePath}.${process.pid}.tmp`;
+      const tempCacheFilePath = `${cacheFilePath}.${process.pid}.${++tempFileCounter}.tmp`;
       const promise = (async () => {
+        let renamed = false;
         try {
           const jsonData = JSON.stringify(cacheData);
           const compressed = zlib.gzipSync(jsonData);
           await fs.promises.writeFile(tempCacheFilePath, compressed);
           await fs.promises.rename(tempCacheFilePath, cacheFilePath);
+          renamed = true;
           if (cacheName === "stats") {
             results[cacheName] = {
               success: true,
@@ -106,17 +153,20 @@ async function saveCachesToFiles() {
             success: false,
             error: err.message,
           };
-          try {
-            if (fs.existsSync(tempCacheFilePath)) {
+        } finally {
+          if (!renamed) {
+            try {
               await fs.promises.unlink(tempCacheFilePath);
-            }
-          } catch (cleanupErr) {
-            logger.warn(
-              `Failed to delete temporary cache file: ${tempCacheFilePath}`,
-              {
-                error: cleanupErr.message,
+            } catch (cleanupErr) {
+              if (cleanupErr.code !== "ENOENT") {
+                logger.warn(
+                  `Failed to delete temporary cache file: ${tempCacheFilePath}`,
+                  {
+                    error: cleanupErr.message,
+                  }
+                );
               }
-            );
+            }
           }
         }
       })();
@@ -316,11 +366,20 @@ const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
 const TRAKT_API_BASE = "https://api.trakt.tv";
 
+// Ownership proof for stremio-addons.net. Must appear in every manifest we
+// serve, so it also lives on the SDK manifest in addon.js - keep them in sync.
+const STREMIO_ADDONS_CONFIG = {
+  issuer: "https://stremio-addons.net",
+  signature:
+    "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..IuQnMO0MAGwCCkdKhW253w.sdxXckhHtOmnSWY9RdfK2UWbGmpVwZNrukt67ytRDizG4x1MlNd8qWr_PIaMRM3Eqx2Mq7l1Pvx1yaKKKPs7IRj2gBnbg1rkwchEtWZbeKf71eT7hgcg2rbB7nvJij-k._iJUauFMIGT_3nw0pdgpJg",
+};
+
 const setupManifest = {
   id: "au.itcon.aisearch",
   version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
+  stremioAddonsConfig: STREMIO_ADDONS_CONFIG,
   logo: `${HOST}${BASE_PATH}/logo.png`,
   background: `${HOST}${BASE_PATH}/bg.jpg`,
   resources: ["catalog"],
@@ -359,6 +418,8 @@ const getConfiguredManifest = (geminiKey, tmdbKey) => ({
 async function startServer() {
   try {
     await initDb();
+    // Remove .tmp files orphaned by previous crashed/killed saves
+    cleanupStaleTempFiles();
     // Load caches from files on startup
     await loadCachesFromFiles();
     const { purgeEmptyAiCacheEntries } = require("./addon");
@@ -372,7 +433,13 @@ async function startServer() {
     }, CACHE_BACKUP_INTERVAL_MS);
 
     // Set up graceful shutdown handlers
+    let shuttingDown = false;
     const gracefulShutdown = async (signal) => {
+      if (shuttingDown) {
+        logger.info(`Received ${signal} during shutdown, ignoring.`);
+        return;
+      }
+      shuttingDown = true;
       logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
       try {
@@ -952,8 +1019,18 @@ async function startServer() {
         });
       });
 
+      // Rate-limit config decryption to hinder bulk harvesting of configs.
+      // The configure page makes a single call per edit-page load.
+      const getConfigRateLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 30,
+        message: { error: "Too many requests, please try again later" },
+        standardHeaders: true,
+        legacyHeaders: false,
+      });
+
       // Update the getConfig endpoint to handle the full path
-      addonRouter.get(routePath + "api/getConfig/:configId", (req, res) => {
+      addonRouter.get(routePath + "api/getConfig/:configId", getConfigRateLimiter, (req, res) => {
         try {
           const { configId } = req.params;
 
@@ -994,38 +1071,6 @@ async function startServer() {
         }
       );
 
-      // API endpoint to decrypt configuration
-      addonRouter.post(routePath + "api/decrypt-config", (req, res) => {
-        try {
-          const { encryptedConfig } = req.body;
-
-          if (!encryptedConfig || !isValidEncryptedFormat(encryptedConfig)) {
-            return res
-              .status(400)
-              .json({ error: "Invalid configuration format" });
-          }
-
-          const decryptedConfig = decryptConfig(encryptedConfig);
-
-          if (!decryptedConfig) {
-            return res
-              .status(400)
-              .json({ error: "Failed to decrypt configuration" });
-          }
-
-          // Parse the decrypted JSON
-          const config = JSON.parse(decryptedConfig);
-
-          // Return the configuration object
-          res.json(config);
-        } catch (error) {
-          logger.error("Error decrypting configuration:", {
-            error: error.message,
-            stack: error.stack,
-          });
-          res.status(500).json({ error: "Internal server error" });
-        }
-      });
 
       addonRouter.get(
         routePath + "cache/clear/tmdb",
@@ -1448,37 +1493,8 @@ async function startServer() {
       }
     );
 
-    app.post(["/decrypt", "/aisearch/decrypt"], express.json(), (req, res) => {
-      try {
-        const { encryptedConfig } = req.body;
-        if (!encryptedConfig) {
-          return res.status(400).json({ error: "Missing encrypted config" });
-        }
-
-        const decryptedConfig = decryptConfig(encryptedConfig);
-        if (!decryptedConfig) {
-          return res.status(500).json({ error: "Decryption failed" });
-        }
-
-        try {
-          const configData = JSON.parse(decryptedConfig);
-          return res.json({ success: true, config: configData });
-        } catch (error) {
-          return res
-            .status(500)
-            .json({ error: "Invalid JSON in decrypted config" });
-        }
-      } catch (error) {
-        logger.error("Decryption endpoint error:", {
-          error: error.message,
-          stack: error.stack,
-        });
-        return res.status(500).json({ error: "Server error" });
-      }
-    });
-
     app.use(
-      ["/encrypt", "/decrypt", "/aisearch/encrypt", "/aisearch/decrypt"],
+      ["/encrypt", "/aisearch/encrypt"],
       (req, res, next) => {
         res.header("Access-Control-Allow-Origin", "*");
         res.header(
@@ -1706,32 +1722,6 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
   }
 });
 
-    app.get("/test-crypto", (req, res) => {
-      try {
-        const testData = JSON.stringify({
-          test: "data",
-          timestamp: Date.now(),
-        });
-
-        const encrypted = encryptConfig(testData);
-        const decrypted = decryptConfig(encrypted);
-
-        res.json({
-          original: testData,
-          encrypted: encrypted,
-          decrypted: decrypted,
-          success: testData === decrypted,
-          encryptedLength: encrypted ? encrypted.length : 0,
-          decryptedLength: decrypted ? decrypted.length : 0,
-        });
-      } catch (error) {
-        res.status(500).json({
-          error: error.message,
-          stack: error.stack,
-        });
-      }
-    });
-
     // Add rate limiter for issue submissions
     const issueRateLimiter = rateLimit({
       windowMs: 60 * 60 * 1000, // 1 hour window
@@ -1776,7 +1766,9 @@ app.post(["/validate", "/aisearch/validate"], express.json(), async (req, res) =
       }
     );
 
-    app.listen(PORT, "0.0.0.0", () => {
+    // Bind to loopback by default; the public entry point is the reverse proxy.
+    // Set BIND_ADDRESS=0.0.0.0 to expose directly (not recommended).
+    app.listen(PORT, process.env.BIND_ADDRESS || "127.0.0.1", () => {
       if (ENABLE_LOGGING) {
         logger.info("Server started", {
           environment: "production",

@@ -23,7 +23,7 @@ module.exports = {
       exp_backoff_restart_delay: 100, // Delay between restarts
       min_uptime: "30s",
       listen_timeout: 8000,
-      kill_timeout: 5000,
+      kill_timeout: 30000, // allow shutdown cache saves to finish before SIGKILL
     },
   ],
 };

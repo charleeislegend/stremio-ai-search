@@ -201,20 +201,10 @@
           margin: 10px 0;
         }
 
-        /* Make the Trakt.tv button more touch-friendly */
         .secondary-button {
           padding: 12px;
           font-size: 16px;
           height: 48px;
-        }
-        .trakt-button-group {
-          flex-direction: column;
-          gap: 8px;
-        }
-        .trakt-button-group .secondary-button {
-          flex: unset !important;
-          width: 100%;
-          margin-left: 0 !important;
         }
       }
 
@@ -562,14 +552,12 @@
             >AI Provider <span class="required">*</span></label
           >
           <select id="aiProvider" class="form-select">
-            <option value="gemini" selected>Gemini (Google AI Studio)</option>
-            <option value="openai-compat">
+            <option value="openai-compat" selected>
               OpenAI-compatible (OpenAI / OpenRouter / Z.ai / etc.)
             </option>
           </select>
           <div class="help-text">
-            Choose either a Gemini-compatible model or any OpenAI-compatible
-            endpoint.
+            Choose any OpenAI-compatible endpoint.
           </div>
         </div>
 
@@ -815,44 +803,17 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Trakt.tv Integration</label>
-            <div class="trakt-button-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-              <button
-                id="traktAuthBtn"
-                class="secondary-button"
-                onclick="authenticateTrakt()"
-                style="margin-bottom: 0; flex: 3;"
-              >
-                Login with Trakt.tv
-              </button>
-              <button
-                id="traktDisconnectBtn"
-                class="secondary-button"
-                onclick="disconnectTrakt()"
-                style="margin-bottom: 0; flex: 1; margin-left: 8px; background-color: #8b0000; display: none;"
-              >
-                Disconnect
-              </button>
-            </div>
-            <input
-              type="hidden"
-              id="traktAccessToken"
-              placeholder="Will be automatically filled after authentication"
-            />
-            <input type="hidden" id="traktRefreshToken" />
-            <input type="hidden" id="traktUsername" />
-            <input type="hidden" id="traktExpiresIn" />
-            <div class="help-text">
-              Connect your Trakt.tv account to get personalized movie
-              recommendations based on your watch history and ratings.
-              <br />
-              <small
-                >Note: You'll need to re-authenticate every 90 days for security
-                reasons.</small
-              >
-            </div>
-          </div>
+          <!--
+            Trakt.tv integration is retired. The visible controls are gone, but
+            these hidden fields stay: roughly forty places in the script below
+            read their .value, and removing them would mean rewriting the whole
+            configure flow - the one page every user has to get through. They
+            render nothing and always submit empty.
+          -->
+          <input type="hidden" id="traktAccessToken" />
+          <input type="hidden" id="traktRefreshToken" />
+          <input type="hidden" id="traktUsername" />
+          <input type="hidden" id="traktExpiresIn" />
 
           <div class="form-group">
             <label class="form-label" for="tmdbLanguage"
@@ -1690,9 +1651,9 @@
               // Pre-fill the form with the existing configuration
               if (config.AiProvider) {
                 document.getElementById("aiProvider").value = config.AiProvider;
-              } else if (config.OpenAICompatApiKey && !config.GeminiApiKey) {
+              } else if (config.GeminiApiKey && !config.OpenAICompatApiKey) {
                 // Backwards-compatible detection for configs created before AiProvider existed
-                document.getElementById("aiProvider").value = "openai-compat";
+                document.getElementById("aiProvider").value = "gemini";
               }
               toggleAiProviderVisibility();
 
@@ -1868,7 +1829,7 @@ window.addEventListener("message", async function (event) {
             updateTraktStatus(
               `Connected as ${username}`,
               "#2a5a2a", // Green color for success
-              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon' below to save.`,
+              `Successfully connected as <strong>${username}</strong>! Click 'Configure Addon in Stremio' below to reinstall the addon and save your connection.`,
               true
             );
           } catch (error) {
@@ -1923,7 +1884,7 @@ window.addEventListener("message", async function (event) {
                     updateTraktStatus(
                         "Re-Login with Trakt.tv",
                         "#5a2a2a", // Red color
-                        `<strong>Connection expired:</strong> Your Trakt.tv connection for <strong>${existingUsername}</strong> is no longer valid. Please click the button above to log in again.`
+                        `<strong>Connection expired:</strong> Your Trakt.tv connection for <strong>${existingUsername}</strong> is no longer valid. Please click the button above to log in again, then reinstall the addon via 'Configure Addon in Stremio' below.`
                     );
                 }
             } catch (error) {

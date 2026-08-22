@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Environment variables
 .env
@@ -23,3 +22,6 @@ howto.txt
 # Server specific
 monitor.sh
 trakt_tokens.db
+
+# Personal assistant notes - never published
+CLAUDE.local.md
