@@ -1336,6 +1336,13 @@ const manifest = {
   version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
+  // Ownership proof for stremio-addons.net. Mirrored from server.js
+  // (STREMIO_ADDONS_CONFIG) - if one changes, change both.
+  stremioAddonsConfig: {
+    issuer: "https://stremio-addons.net",
+    signature:
+      "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..IuQnMO0MAGwCCkdKhW253w.sdxXckhHtOmnSWY9RdfK2UWbGmpVwZNrukt67ytRDizG4x1MlNd8qWr_PIaMRM3Eqx2Mq7l1Pvx1yaKKKPs7IRj2gBnbg1rkwchEtWZbeKf71eT7hgcg2rbB7nvJij-k._iJUauFMIGT_3nw0pdgpJg",
+  },
   resources: [
     "catalog",
     {

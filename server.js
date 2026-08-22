@@ -366,11 +366,20 @@ const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
 const TRAKT_API_BASE = "https://api.trakt.tv";
 
+// Ownership proof for stremio-addons.net. Must appear in every manifest we
+// serve, so it also lives on the SDK manifest in addon.js - keep them in sync.
+const STREMIO_ADDONS_CONFIG = {
+  issuer: "https://stremio-addons.net",
+  signature:
+    "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..IuQnMO0MAGwCCkdKhW253w.sdxXckhHtOmnSWY9RdfK2UWbGmpVwZNrukt67ytRDizG4x1MlNd8qWr_PIaMRM3Eqx2Mq7l1Pvx1yaKKKPs7IRj2gBnbg1rkwchEtWZbeKf71eT7hgcg2rbB7nvJij-k._iJUauFMIGT_3nw0pdgpJg",
+};
+
 const setupManifest = {
   id: "au.itcon.aisearch",
   version: "1.0.65",
   name: "AI Search",
   description: "AI-powered movie and series recommendations",
+  stremioAddonsConfig: STREMIO_ADDONS_CONFIG,
   logo: `${HOST}${BASE_PATH}/logo.png`,
   background: `${HOST}${BASE_PATH}/bg.jpg`,
   resources: ["catalog"],
