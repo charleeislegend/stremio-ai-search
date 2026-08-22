@@ -815,7 +815,7 @@
             </div>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" id="traktSection">
             <label class="form-label">Trakt.tv Integration</label>
             <div class="trakt-button-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
               <button
@@ -1198,6 +1198,22 @@
       const addonName = "AI Search";
       const TRAKT_CLIENT_ID = "YOUR_ADDON_CLIENT_ID"; // This will be replaced with the actual client ID from the server
       const HOST = "stremio.itcon.au"; // This will be replaced with the actual host from the server
+
+      // When the server has no Trakt client ID configured, the OAuth flow
+      // cannot work at all - the button would send people to a Trakt error
+      // page. Hide the section and say why instead.
+      const TRAKT_ENABLED =
+        !!TRAKT_CLIENT_ID && TRAKT_CLIENT_ID !== "YOUR_ADDON_CLIENT_ID";
+      document.addEventListener("DOMContentLoaded", function () {
+        if (TRAKT_ENABLED) return;
+        const section = document.getElementById("traktSection");
+        if (!section) return;
+        section.innerHTML =
+          '<label class="form-label">Trakt.tv Integration</label>' +
+          '<div class="help-text">Trakt integration is currently unavailable on ' +
+          "this server. Everything else works normally - personalised " +
+          "recommendations from your Trakt history are simply disabled.</div>";
+      });
 
       function setLoading(isLoading) {
         const configureBtn = document.getElementById("configureBtn");
