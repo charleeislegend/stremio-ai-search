@@ -2246,6 +2246,10 @@ const tmdbData = await searchTMDB(
       .filter(Boolean);
   }
 
+  if (type === "movie") {
+    meta.behaviorHints = { defaultVideoId: meta.id };
+  }
+
   return meta;
 }
 
