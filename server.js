@@ -358,7 +358,7 @@ if (ENABLE_LOGGING) {
 const PORT = 7000;
 const HOST = process.env.HOST
   ? `https://${process.env.HOST}`
-  : "https://stremio.itcon.au";
+  : "https://stremio.tomz.dev";
 const BASE_PATH = "/aisearch";
 
 const DEFAULT_RPDB_KEY = process.env.RPDB_API_KEY;
