@@ -4311,7 +4311,7 @@ const streamHandler = async (args, req) => {
   const stream = {
     name: "✨ AI Search",
     description: "Similar movies and shows.",
-    externalUrl: `${stremioUrlPrefix}/detail/${args.type}/ai-recs:${args.id}`,
+    externalUrl: `${stremioUrlPrefix}/detail/${args.type}/ai-recs:${args.id}${args.type === "movie" ? `/ai-recs:${args.id}` : ""}`,
     behaviorHints: {
       notWebReady: true,
     },
