@@ -201,20 +201,10 @@
           margin: 10px 0;
         }
 
-        /* Make the Trakt.tv button more touch-friendly */
         .secondary-button {
           padding: 12px;
           font-size: 16px;
           height: 48px;
-        }
-        .trakt-button-group {
-          flex-direction: column;
-          gap: 8px;
-        }
-        .trakt-button-group .secondary-button {
-          flex: unset !important;
-          width: 100%;
-          margin-left: 0 !important;
         }
       }
 
@@ -815,44 +805,17 @@
             </div>
           </div>
 
-          <div class="form-group" id="traktSection">
-            <label class="form-label">Trakt.tv Integration</label>
-            <div class="trakt-button-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-              <button
-                id="traktAuthBtn"
-                class="secondary-button"
-                onclick="authenticateTrakt()"
-                style="margin-bottom: 0; flex: 3;"
-              >
-                Login with Trakt.tv
-              </button>
-              <button
-                id="traktDisconnectBtn"
-                class="secondary-button"
-                onclick="disconnectTrakt()"
-                style="margin-bottom: 0; flex: 1; margin-left: 8px; background-color: #8b0000; display: none;"
-              >
-                Disconnect
-              </button>
-            </div>
-            <input
-              type="hidden"
-              id="traktAccessToken"
-              placeholder="Will be automatically filled after authentication"
-            />
-            <input type="hidden" id="traktRefreshToken" />
-            <input type="hidden" id="traktUsername" />
-            <input type="hidden" id="traktExpiresIn" />
-            <div class="help-text">
-              Connect your Trakt.tv account to get personalized movie
-              recommendations based on your watch history and ratings.
-              <br />
-              <small
-                >Note: You'll need to re-authenticate every 90 days for security
-                reasons.</small
-              >
-            </div>
-          </div>
+          <!--
+            Trakt.tv integration is retired. The visible controls are gone, but
+            these hidden fields stay: roughly forty places in the script below
+            read their .value, and removing them would mean rewriting the whole
+            configure flow - the one page every user has to get through. They
+            render nothing and always submit empty.
+          -->
+          <input type="hidden" id="traktAccessToken" />
+          <input type="hidden" id="traktRefreshToken" />
+          <input type="hidden" id="traktUsername" />
+          <input type="hidden" id="traktExpiresIn" />
 
           <div class="form-group">
             <label class="form-label" for="tmdbLanguage"
@@ -1198,22 +1161,6 @@
       const addonName = "AI Search";
       const TRAKT_CLIENT_ID = "YOUR_ADDON_CLIENT_ID"; // This will be replaced with the actual client ID from the server
       const HOST = "stremio.itcon.au"; // This will be replaced with the actual host from the server
-
-      // When the server has no Trakt client ID configured, the OAuth flow
-      // cannot work at all - the button would send people to a Trakt error
-      // page. Hide the section and say why instead.
-      const TRAKT_ENABLED =
-        !!TRAKT_CLIENT_ID && TRAKT_CLIENT_ID !== "YOUR_ADDON_CLIENT_ID";
-      document.addEventListener("DOMContentLoaded", function () {
-        if (TRAKT_ENABLED) return;
-        const section = document.getElementById("traktSection");
-        if (!section) return;
-        section.innerHTML =
-          '<label class="form-label">Trakt.tv Integration</label>' +
-          '<div class="help-text">Trakt integration is currently unavailable on ' +
-          "this server. Everything else works normally - personalised " +
-          "recommendations from your Trakt history are simply disabled.</div>";
-      });
 
       function setLoading(isLoading) {
         const configureBtn = document.getElementById("configureBtn");
