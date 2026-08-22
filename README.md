@@ -3,6 +3,7 @@
 </div>
 
 > [!IMPORTANT]
+> 22/08/2026 - Addon currently available. Maintenance activities in progress.
 > **Addon does not work directly with Gemini AI provider, you can use Gemini using OpenRouter (Select Open AI Compatible in AI Provider)**
 >
 >
