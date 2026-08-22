@@ -70,7 +70,8 @@ function getOpenAIChatCompletionsUrl(baseUrl) {
   const raw = (baseUrl || "").trim().replace(/\/+$/, "");
   if (!raw) return "https://api.openai.com/v1/chat/completions";
   if (raw.includes("/chat/completions")) return raw;
-  if (raw.endsWith("/v1")) return `${raw}/chat/completions`;
+  // Already versioned (e.g. /v1 for OpenAI/OpenRouter, /v4 for Z.ai)
+  if (/\/v\d+$/i.test(raw)) return `${raw}/chat/completions`;
   return `${raw}/v1/chat/completions`;
 }
 
