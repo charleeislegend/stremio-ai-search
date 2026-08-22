@@ -15,8 +15,7 @@ An intelligent search addon for Stremio powered by AI (Gemini-compatible or any 
 
 ## Features
 
-- Trakt integration to help the AI suggest personalized recommendations. Note: Only searches starting with "Recommend" will provide personalized recommendations using your watch history from Trakt.
-- Choose between Gemini-compatible and OpenAI-compatible models (provider + model are configurable)
+- Works with any OpenAI-compatible provider (OpenRouter, OpenAI, Z.ai and others) — model and base URL are configurable
 - You can set the number of recommendations AI should return for a query (30 Max)
 - TMDB integration ensures you have a content rich catalog for movies and series
 - RPDB integration gives you access to awesome posters with inbuilt ratings
@@ -39,18 +38,16 @@ An intelligent search addon for Stremio powered by AI (Gemini-compatible or any 
 
 ## AI Provider Setup
 
-> [!IMPORTANT]
-> **Prefer OpenRouter over a direct Gemini API key.**
+> [!NOTE]
+> **The direct Gemini provider has been removed.**
 >
-> Google has started rejecting requests from the hosted addon's server with a *"not allowed region"* error — ironically, the server is in Los Angeles. This left a lot of users unable to get any results at all. You can use 'Open AI compatible' AI provider and even select Gemini , which sidesteps the block completely.
+> Google rejects requests from the hosted addon's server with a *"not allowed region"* error — ironically, the server is in Los Angeles — so the option only ever led to a dead end. Gemini models are still perfectly usable **through an OpenAI-compatible gateway** such as OpenRouter, which sidesteps the block entirely.
 
-In the configuration page you can choose an AI provider:
+The addon uses an **OpenAI-compatible** provider — OpenRouter, OpenAI, Z.ai, or anything else speaking that API:
 
-- **OpenAI-compatible (recommended)**: works with OpenRouter / OpenAI / Z.ai / other OpenAI-compatible APIs
-  - Base URL examples: `https://openrouter.ai/api`, `https://api.openai.com`
-  - Model examples: `google/gemini-2.5-flash` (OpenRouter-style), `gpt-4o-mini`
-  - Optional extra headers (JSON): `{"HTTP-Referer":"https://example.com","X-Title":"Stremio AI Search"}`
-- **Gemini**: use a key from Google AI Studio and a Gemini model id (e.g. `gemini-2.5-flash-lite`) — subject to the regional blocking described above
+- Base URL examples: `https://openrouter.ai/api`, `https://api.openai.com`
+- Model examples: `google/gemini-2.5-flash` (OpenRouter-style), `gpt-4o-mini`
+- Optional extra headers (JSON): `{"HTTP-Referer":"https://example.com","X-Title":"Stremio AI Search"}`
 
 Advanced option:
 - **AI Temperature**: controls randomness (lower is more deterministic; default `0.2`)
@@ -82,8 +79,6 @@ Use a Title:Query format for each entry. This colon-separated, key-value pair ap
 
 -   **Use a Comma-Separated List**: To create multiple catalogs in your homepage, separate each Title:Query pair with a comma.
     -   *Example*: `Mystery:recommend mystery thrillers,Sports:recommend sports movies`
--   **Get Personalized Recommendations**: Start your query with the word recommend to leverage your Trakt.tv watch history and ratings for highly personalized suggestions.
-    -   *Example*: `For You:recommend feel-good movies` will find movies similar to what you've watched and liked on Trakt.
 -   **Find the Latest Content**: Use keywords like new, latest, or recent to discover the most up-to-date movies and shows.
     -   *Example*: `New Series:new popular series` or `Recent Anime:latest anime movies`
 -   **Be Specific**: The addon is intelligent. If you specify "movies" in your query, it will only create a movie catalog. Similarly, asking for "series" will result in only a series catalog. For ambiguous queries, it will create catalogs for both movies and series.
@@ -498,15 +493,17 @@ Here are some examples showing how versatile this addon is.
 
 When self-hosting the addon, you can configure the following environment variables in a `.env` file:
 
-- `HOST` - Your domain/hostname without protocol (e.g., `example.com` or `localhost:7000`)
-- `TRAKT_CLIENT_ID` - Your Trakt API client ID
-- `TRAKT_CLIENT_SECRET` - Your Trakt API client secret
-- `ENCRYPTION_KEY` - Key used for encrypting sensitive configuration data
-- `RPDB_API_KEY` - API key for RPDB integration
-- `ENABLE_LOGGING` - Set to "true" to enable logging
-- `GITHUB_TOKEN` - GitHub token for issue submission
-- `RECAPTCHA_SECRET_KEY` - Secret key for reCAPTCHA
-- `ADMIN_TOKEN` - Token required for accessing cache management endpoints (new)
+- `HOST` — your hostname **without a scheme** (e.g. `example.com` or `localhost:7000`). The app prepends `https://` itself; including it produces `https://https://…` URLs in the manifest.
+- `ENCRYPTION_KEY` — encrypts each user's configuration inside their install URL. **Required**, at least 32 characters. Treat it as permanent: changing it invalidates every existing install, because nobody's URL can be decrypted any more. Back it up.
+- `ADMIN_TOKEN` — required by the cache-management endpoints below. If unset, those endpoints refuse every request.
+- `RPDB_API_KEY` / `RPDB_FREE_T0_API_KEY` — RPDB posters (optional)
+- `FANART_API_KEY` — landscape artwork for "Similar" recommendations (optional)
+- `GITHUB_TOKEN` — lets in-app feedback open issues. A fine-grained token needs only **Issues: Read and write** on this repo; never grant `repo` (optional)
+- `RECAPTCHA_SECRET_KEY` — reCAPTCHA on the feedback form (optional)
+- `ENABLE_LOGGING` — `true` to enable file logging (optional)
+
+Trakt integration is retired, so `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` are
+no longer used.
 
 ### Admin Endpoints
 
