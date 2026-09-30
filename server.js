@@ -12,7 +12,9 @@ process.on("warning", (warning) => {
 try {
   require("dotenv").config();
 } catch (error) {
-  logger.warn("dotenv module not found, continuing without .env file support");
+  // The application logger is initialized below; don't mask a loading error
+  // with a temporal-dead-zone ReferenceError during startup.
+  console.warn("dotenv could not be loaded; continuing with process environment:", error.message);
 }
 
 const { serveHTTP } = require("stremio-addon-sdk");
